@@ -1,15 +1,20 @@
-import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import { useAuth } from '@/contexts/AuthContext';
-import { LoginScreen } from '@/screens/auth/LoginScreen';
+import { AuthFlow } from '@/navigation/AuthFlow';
+import { HouseholdHomeScreen } from '@/screens/home/HouseholdHomeScreen';
+import { CommercialHomeScreen } from '@/screens/home/CommercialHomeScreen';
 import { colors } from '@/theme/colors';
-import { fonts } from '@/theme/fonts';
 
 /**
  * Top-level navigation gate. Chooses between the auth flow (signed out) and the
  * customer app (signed in), or a splash while the session restores.
  *
- * SCAFFOLD: the signed-in branch is still a placeholder. Introduce React
- * Navigation here when the customer tabs land —
+ * Signed in, the app opens the rewards home for the customer's account type:
+ * Household (points) vs Commercial (30+1 exchange). The account type comes from
+ * the login tab (see AuthContext); an unknown type defaults to Household.
+ *
+ * SCAFFOLD: each account type currently shows a single home screen. Introduce
+ * React Navigation here when the customer tabs land —
  *   <NavigationContainer>
  *     {session ? <AppTabs /> : <AuthStack />}
  *   </NavigationContainer>
@@ -23,7 +28,7 @@ import { fonts } from '@/theme/fonts';
  *   - Feedback    → screens/feedback  (CSAT rating · complaint) — reached post-delivery
  */
 export function RootNavigator() {
-  const { session, initializing } = useAuth();
+  const { session, accountType, initializing } = useAuth();
 
   if (initializing) {
     return (
@@ -34,16 +39,11 @@ export function RootNavigator() {
   }
 
   if (!session) {
-    return <LoginScreen />;
+    return <AuthFlow />;
   }
 
-  // Signed in — placeholder until the customer tabs are wired up.
-  return (
-    <View style={styles.center}>
-      <Text style={styles.title}>Superkalan Gaz</Text>
-      <Text style={styles.subtitle}>Signed in — wire up the customer tabs.</Text>
-    </View>
-  );
+  // Signed in — route to the rewards home for this account type.
+  return accountType === 'commercial' ? <CommercialHomeScreen /> : <HouseholdHomeScreen />;
 }
 
 const styles = StyleSheet.create({
@@ -54,6 +54,4 @@ const styles = StyleSheet.create({
     backgroundColor: colors.loginBackground,
     padding: 24,
   },
-  title: { fontSize: 22, fontFamily: fonts.bold, color: colors.heading },
-  subtitle: { marginTop: 8, fontSize: 14, fontFamily: fonts.regular, color: colors.textMuted, textAlign: 'center' },
 });

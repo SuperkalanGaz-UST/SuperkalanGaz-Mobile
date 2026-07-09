@@ -28,10 +28,16 @@ type SignInMethod = 'email' | 'phone';
 /**
  * Customer login (Figma node 175-1759). Both methods sign in through Supabase Auth
  * via AuthContext: email/password, or PH mobile number + password (the number is
- * normalized to E.164 before it's sent). The Household/Commercial tabs are UI per
- * the design.
+ * normalized to E.164 before it's sent). The Household/Commercial tab is passed to
+ * sign-in as the account type — it decides which rewards home the app opens
+ * (Household = points, Commercial = 30+1 exchange).
  */
-export function LoginScreen() {
+interface LoginScreenProps {
+  /** Open the sign-up flow, carrying the selected Household/Commercial tab. */
+  onSignUp?: (accountType: AccountTab) => void;
+}
+
+export function LoginScreen({ onSignUp }: LoginScreenProps = {}) {
   const insets = useSafeAreaInsets();
   const { signIn, signInWithPhone } = useAuth();
 
@@ -66,8 +72,8 @@ export function LoginScreen() {
 
     setSubmitting(true);
     const { error: authError } = isEmail
-      ? await signIn(identifier.trim().toLowerCase(), password)
-      : await signInWithPhone(phone as string, password);
+      ? await signIn(identifier.trim().toLowerCase(), password, tab)
+      : await signInWithPhone(phone as string, password, tab);
     setSubmitting(false);
     // On success the auth listener swaps this screen out; only failures land here.
     if (authError) setError(authError);
@@ -186,7 +192,7 @@ export function LoginScreen() {
 
           <View style={styles.footer}>
             <Text style={styles.footerText}>Don’t have an account? </Text>
-            <Pressable hitSlop={6}>
+            <Pressable hitSlop={6} onPress={() => onSignUp?.(tab)}>
               <Text style={styles.signupLink}>Sign Up</Text>
             </Pressable>
           </View>

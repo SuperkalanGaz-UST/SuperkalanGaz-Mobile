@@ -29,6 +29,21 @@ export const colors = {
   segmentTrack: '#F4F5F6', // Email/Phone segmented track
   footerText: '#193028', // "Don't have an account?"
   signupLink: '#2D7DEE', // "Sign Up"
+
+  // Dark tint layered over the sign-up sheet's blur. Stands on its own so the
+  // backdrop still reads as dimmed on Android, where BlurView is weak/absent.
+  scrim: 'rgba(2,20,34,0.45)',
+
+  // --- Home / Quick Order (Figma landing) ---
+  helloAccent: '#81D1FF', // the "Juan" in the header greeting
+  pointsTop: '#044674', // points card gradient — top (dark)
+  pointsBottom: '#0883DA', // points card gradient — bottom (light)
+  homeSheet: '#FFFFFF', // white rounded sheet under the blue header
+  claimBtn: '#D7EFFF', // pale blue "Claim Reward" button
+  detailsBtn: 'rgba(70,161,225,0.20)', // translucent "Details" button on the card
+  activeFooter: '#E5F2F9', // "View Order Details" strip
+  activeCardBorder: '#EAEAEA', // Active Orders card outline
+  navInactive: '#9DB2CE', // inactive bottom-tab icon/label
 } as const;
 
 export type ColorToken = keyof typeof colors;
