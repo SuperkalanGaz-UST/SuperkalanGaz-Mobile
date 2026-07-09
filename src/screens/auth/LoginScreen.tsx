@@ -14,6 +14,7 @@ import {
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@/contexts/AuthContext';
+import { normalizePhMobile } from '@/lib/phMobile';
 import { colors } from '@/theme/colors';
 import { fonts } from '@/theme/fonts';
 
@@ -21,17 +22,18 @@ const logo = require('../../../assets/images/superkalan-gaz.png');
 
 /** Household = residential customers, Commercial = business accounts. */
 type AccountTab = 'household' | 'commercial';
-/** Sign-in identifier: email/password (wired) vs phone (not yet supported). */
+/** Sign-in identifier: email/password or phone/password — both via Supabase Auth. */
 type SignInMethod = 'email' | 'phone';
 
 /**
- * Customer login (Figma node 175-1759). Email/password is wired to Supabase Auth
- * via AuthContext; the Household/Commercial tabs and the Phone method are UI per
- * the design — phone sign-in has no backend yet, so it's guarded with a notice.
+ * Customer login (Figma node 175-1759). Both methods sign in through Supabase Auth
+ * via AuthContext: email/password, or PH mobile number + password (the number is
+ * normalized to E.164 before it's sent). The Household/Commercial tabs are UI per
+ * the design.
  */
 export function LoginScreen() {
   const insets = useSafeAreaInsets();
-  const { signIn } = useAuth();
+  const { signIn, signInWithPhone } = useAuth();
 
   const [tab, setTab] = useState<AccountTab>('household');
   const [method, setMethod] = useState<SignInMethod>('email');
@@ -47,17 +49,25 @@ export function LoginScreen() {
     if (submitting) return;
     setError(null);
 
-    if (!isEmail) {
-      setError('Phone sign-in isn’t available yet — use your email address.');
-      return;
-    }
     if (!identifier.trim() || !password) {
-      setError('Enter your email and password.');
+      setError(isEmail ? 'Enter your email and password.' : 'Enter your mobile number and password.');
       return;
     }
 
+    // Phone: accept 0917…, 917…, or +63917… and normalize to E.164 before sending.
+    let phone: string | null = null;
+    if (!isEmail) {
+      phone = normalizePhMobile(identifier);
+      if (!phone) {
+        setError('Enter a valid PH mobile number (e.g. 0917 123 4567).');
+        return;
+      }
+    }
+
     setSubmitting(true);
-    const { error: authError } = await signIn(identifier.trim().toLowerCase(), password);
+    const { error: authError } = isEmail
+      ? await signIn(identifier.trim().toLowerCase(), password)
+      : await signInWithPhone(phone as string, password);
     setSubmitting(false);
     // On success the auth listener swaps this screen out; only failures land here.
     if (authError) setError(authError);

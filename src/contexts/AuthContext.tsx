@@ -16,6 +16,8 @@ interface AuthContextValue {
   /** True until the initial session has been restored from storage. */
   initializing: boolean;
   signIn: (email: string, password: string) => Promise<{ error: string | null }>;
+  /** Phone sign-in. `phone` must be canonical E.164 (`+639XXXXXXXXX`). */
+  signInWithPhone: (phone: string, password: string) => Promise<{ error: string | null }>;
   signOut: () => Promise<void>;
 }
 
@@ -43,6 +45,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       initializing,
       signIn: async (email, password) => {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
+        return { error: error?.message ?? null };
+      },
+      signInWithPhone: async (phone, password) => {
+        const { error } = await supabase.auth.signInWithPassword({ phone, password });
         return { error: error?.message ?? null };
       },
       signOut: async () => {
