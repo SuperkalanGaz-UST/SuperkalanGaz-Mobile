@@ -1,0 +1,27 @@
+{
+  "expo": {
+    "name": "Superkalan Gaz",
+    "slug": "superkalan-crm-mobile",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "superkalan",
+    "userInterfaceStyle": "light",
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "ph.superkalan.crm"
+    },
+    "android": {
+      "package": "ph.superkalan.crm"
+    },
+    "extra": {
+      "apiUrl": "http://localhost:3001"
+    },
+    "plugins": [
+      "expo-status-bar",
+      "expo-font"
+    ]
+  }
+}
