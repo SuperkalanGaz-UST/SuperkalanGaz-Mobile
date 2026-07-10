@@ -105,10 +105,13 @@ export function HomeScaffold({
   firstName,
   loyaltyCard,
   onSignOut,
+  onProfile,
 }: {
   firstName: string;
   loyaltyCard: ReactNode;
   onSignOut: () => void;
+  /** Open the Profile screen (bottom-tab "Profile"). */
+  onProfile?: () => void;
 }) {
   const insets = useSafeAreaInsets();
 
@@ -184,18 +187,41 @@ export function HomeScaffold({
         </View>
       </ScrollView>
 
-      {/* Bottom tab bar */}
-      <View style={[styles.tabBar, { paddingBottom: insets.bottom || 10 }]}>
-        <TabItem icon="home" label="Home" active />
-        <TabItem icon="gift" label="Rewards" />
-        <View style={styles.fabSlot}>
-          <Pressable style={styles.fab} accessibilityLabel="Order gas">
-            <Image source={navCylinder} style={styles.fabIcon} resizeMode="contain" />
-          </Pressable>
-        </View>
-        <TabItem icon="shopping-bag" label="Orders" />
-        <TabItem icon="user" label="Profile" onPress={onSignOut} />
+      <BottomTabBar active="home" onProfile={onProfile} />
+    </View>
+  );
+}
+
+/** Which bottom-tab is highlighted. */
+export type TabKey = 'home' | 'rewards' | 'orders' | 'profile';
+
+/**
+ * The app's bottom tab bar (Figma), shared by every customer surface so the nav
+ * reads as one product. `active` highlights the current tab; Home/Profile can
+ * navigate. Rewards/Orders and the center FAB are visual until their screens
+ * land (see RootNavigator's navigation SCAFFOLD note).
+ */
+export function BottomTabBar({
+  active = 'home',
+  onHome,
+  onProfile,
+}: {
+  active?: TabKey;
+  onHome?: () => void;
+  onProfile?: () => void;
+}) {
+  const insets = useSafeAreaInsets();
+  return (
+    <View style={[styles.tabBar, { paddingBottom: insets.bottom || 10 }]}>
+      <TabItem icon="home" label="Home" active={active === 'home'} onPress={onHome} />
+      <TabItem icon="gift" label="Rewards" active={active === 'rewards'} />
+      <View style={styles.fabSlot}>
+        <Pressable style={styles.fab} accessibilityLabel="Order gas">
+          <Image source={navCylinder} style={styles.fabIcon} resizeMode="contain" />
+        </Pressable>
       </View>
+      <TabItem icon="shopping-bag" label="Orders" active={active === 'orders'} />
+      <TabItem icon="user" label="Profile" active={active === 'profile'} onPress={onProfile} />
     </View>
   );
 }

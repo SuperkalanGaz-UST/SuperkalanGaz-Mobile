@@ -1,8 +1,10 @@
+import { useState } from 'react';
 import { Alert, StyleSheet, Text, View } from 'react-native';
 import { useAuth } from '@/contexts/AuthContext';
 import { colors } from '@/theme/colors';
 import { fonts } from '@/theme/fonts';
 import { HomeScaffold, LoyaltyCard } from '@/screens/home/homeShared';
+import { ProfileScreen } from '@/screens/profile/ProfileScreen';
 
 /** Cylinders a commercial customer must buy to earn one free ("30 + 1"). */
 const EXCHANGE_GOAL = 30;
@@ -17,6 +19,7 @@ const EXCHANGE_GOAL = 30;
  */
 export function CommercialHomeScreen() {
   const { session, signOut } = useAuth();
+  const [showProfile, setShowProfile] = useState(false);
 
   const firstName = (session?.user?.user_metadata?.first_name as string | undefined)?.trim() || 'there';
 
@@ -31,10 +34,15 @@ export function CommercialHomeScreen() {
       { text: 'Sign out', style: 'destructive', onPress: () => void signOut() },
     ]);
 
+  if (showProfile) {
+    return <ProfileScreen onBack={() => setShowProfile(false)} onSignOut={confirmSignOut} />;
+  }
+
   return (
     <HomeScaffold
       firstName={firstName}
       onSignOut={confirmSignOut}
+      onProfile={() => setShowProfile(true)}
       loyaltyCard={
         <LoyaltyCard title="Cylinder Exchange (30 + 1)">
           <Text style={styles.countValue}>

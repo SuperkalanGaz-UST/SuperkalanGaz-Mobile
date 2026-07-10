@@ -1,8 +1,10 @@
+import { useState } from 'react';
 import { Alert, StyleSheet, Text } from 'react-native';
 import { useAuth } from '@/contexts/AuthContext';
 import { colors } from '@/theme/colors';
 import { fonts } from '@/theme/fonts';
 import { HomeScaffold, LoyaltyCard } from '@/screens/home/homeShared';
+import { ProfileScreen } from '@/screens/profile/ProfileScreen';
 
 /**
  * Household customer home — the points rewards landing shown once a residential
@@ -14,6 +16,7 @@ import { HomeScaffold, LoyaltyCard } from '@/screens/home/homeShared';
  */
 export function HouseholdHomeScreen() {
   const { session, signOut } = useAuth();
+  const [showProfile, setShowProfile] = useState(false);
 
   const firstName = (session?.user?.user_metadata?.first_name as string | undefined)?.trim() || 'there';
 
@@ -26,10 +29,15 @@ export function HouseholdHomeScreen() {
       { text: 'Sign out', style: 'destructive', onPress: () => void signOut() },
     ]);
 
+  if (showProfile) {
+    return <ProfileScreen onBack={() => setShowProfile(false)} onSignOut={confirmSignOut} />;
+  }
+
   return (
     <HomeScaffold
       firstName={firstName}
       onSignOut={confirmSignOut}
+      onProfile={() => setShowProfile(true)}
       loyaltyCard={
         <LoyaltyCard title="Superkalan Gaz Points">
           <Text style={styles.pointsValue}>{points.toLocaleString()}</Text>
