@@ -1,6 +1,16 @@
-import { useState } from 'react';
-import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useRef, useState } from 'react';
+import {
+  Image,
+  type LayoutChangeEvent,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  useWindowDimensions,
+  View,
+} from 'react-native';
 import { Feather } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useAuth } from '@/contexts/AuthContext';
 import { colors } from '@/theme/colors';
@@ -10,7 +20,7 @@ import { cylinderFor, images } from '@/lib/assets';
 import { AppHeader } from '@/components/ui/AppHeader';
 import { BottomNav } from '@/components/ui/BottomNav';
 import { SideMenu } from '@/components/ui/SideMenu';
-import { AppGuideOverlay } from '@/components/ui/AppGuide';
+import { AppGuideOverlay, GUIDE_STEP_COUNT, type GuideRect } from '@/components/ui/AppGuide';
 import { LogoutConfirmModal, PromoModal } from '@/components/ui/overlays';
 import { RewardsScreen } from '@/screens/home/RewardsScreen';
 import type { MainScreen, MainTab } from '@/navigation/types';
@@ -36,6 +46,13 @@ const ORDER_AGAIN = [
   { size: '11 KG', date: '10-10-2025' },
 ];
 
+// App-guide step → the Home element it spotlights (null = full dim). Kept in sync
+// with the copy in `AppGuide.tsx` STEPS by index.
+const GUIDE_TARGETS = [null, 'rewards', 'active', 'reorder', 'quick', 'nav', 'help'] as const;
+
+/** Minimal instance shape we need off a ref, given the degraded RN types. */
+type Measurable = { measureInWindow: (cb: (x: number, y: number, w: number, h: number) => void) => void };
+
 export function HomeScreen({
   initialTab = 'home',
   showGuide = false,
@@ -46,50 +63,133 @@ export function HomeScreen({
   onNavigate: (screen: MainScreen, opts?: { tab?: MainTab }) => void;
 }) {
   const { signOut } = useAuth();
+  const insets = useSafeAreaInsets();
+  const { width: winW, height: winH } = useWindowDimensions();
+
   const [activeTab, setActiveTab] = useState<MainTab>(initialTab);
   const [rewardsSub, setRewardsSub] = useState<'my' | 'all'>('my');
   const [menuOpen, setMenuOpen] = useState(false);
   const [logoutConfirm, setLogoutConfirm] = useState(false);
   const [guideOpen, setGuideOpen] = useState(showGuide);
+  const [guideStep, setGuideStep] = useState(0);
+  const [guideRect, setGuideRect] = useState<GuideRect | null>(null);
   const [promoOpen, setPromoOpen] = useState(true);
+
+  // Refs + content-relative offsets for the app-guide spotlight measurements.
+  const scrollRef = useRef<ScrollView>(null);
+  const rewardsRef = useRef<View>(null);
+  const activeRef = useRef<View>(null);
+  const reorderRef = useRef<View>(null);
+  const quickRef = useRef<View>(null);
+  const helpRef = useRef<View>(null);
+  const layoutY = useRef<Record<string, number>>({});
+  const refFor = { rewards: rewardsRef, active: activeRef, reorder: reorderRef, quick: quickRef };
 
   const openRewards = (sub: 'my' | 'all') => {
     setRewardsSub(sub);
     setActiveTab('rewards');
   };
 
+  // The bottom nav is fixed, so its rect is computed rather than measured.
+  const navRect = (): GuideRect => ({ x: 16, y: winH - insets.bottom - 10 - 68, width: winW - 32, height: 68 });
+
+  const scrollTop = () => scrollRef.current?.scrollTo({ y: 0, animated: true });
+
+  // Measure a ref's real window rect (after `delay` so any scroll settles) and set
+  // it as the spotlight. A 16px side inset keeps the box off the screen edges.
+  const applyRect = (ref: { current: unknown }, delay: number) => {
+    setTimeout(() => {
+      (ref.current as Measurable | null)?.measureInWindow((x, wy, w, h) => {
+        const nx = Math.max(x, 16);
+        const nw = Math.min(x + w, winW - 16) - nx;
+        setGuideRect({ x: nx, y: wy, width: nw, height: h });
+      });
+    }, delay);
+  };
+
+  // Move each step's target into view, then spotlight it. Chrome steps (welcome,
+  // nav, help) scroll to the top; content steps scroll to the element. Runs on
+  // both Next and Back, so going back also scrolls onto the assigned spotlight.
+  const prepareStep = (i: number) => {
+    const key = GUIDE_TARGETS[i];
+    if (!key) {
+      scrollTop();
+      setGuideRect(null);
+      return;
+    }
+    if (key === 'nav') {
+      scrollTop();
+      setGuideRect(navRect());
+      return;
+    }
+    if (key === 'help') {
+      scrollTop();
+      applyRect(helpRef, 80); // header is fixed — no need to wait for a scroll
+      return;
+    }
+    const y = layoutY.current[key] ?? 0;
+    scrollRef.current?.scrollTo({ y: Math.max(0, y - 28), animated: true });
+    applyRect(refFor[key], 340);
+  };
+
+  const openGuide = () => {
+    setActiveTab('home');
+    setGuideStep(0);
+    setGuideRect(null);
+    scrollRef.current?.scrollTo({ y: 0, animated: false });
+    setGuideOpen(true);
+  };
+  const guideNext = () => {
+    if (guideStep >= GUIDE_STEP_COUNT - 1) return setGuideOpen(false);
+    const n = guideStep + 1;
+    setGuideStep(n);
+    prepareStep(n);
+  };
+  const guideBack = () => {
+    const p = Math.max(0, guideStep - 1);
+    setGuideStep(p);
+    prepareStep(p);
+  };
+
+  const captureY = (key: string) => (e: LayoutChangeEvent) => {
+    layoutY.current[key] = e.nativeEvent.layout.y;
+  };
+
   return (
     <View style={styles.flex}>
-      <AppHeader onHelp={() => setGuideOpen(true)} onMenu={() => setMenuOpen(true)} />
+      <AppHeader helpRef={helpRef} onHelp={openGuide} onMenu={() => setMenuOpen(true)} />
 
       {activeTab === 'rewards' ? (
         <RewardsScreen initialSub={rewardsSub} onExit={() => setActiveTab('home')} />
       ) : (
         <ScrollView
+          ref={scrollRef}
           style={styles.sheet}
           showsVerticalScrollIndicator={false}
           contentContainerStyle={{ paddingBottom: 130 }}
         >
           {/* Points card */}
-          <LinearGradient colors={[colors.pointsTop, colors.pointsBottom] as const} style={styles.pointsCard}>
-            <Image source={images.logo} style={styles.pointsLogo} resizeMode="contain" />
-            <Text style={styles.pointsLabel}>Superkalan Gaz Points</Text>
-            <Text style={styles.pointsValue}>163</Text>
-            <View style={styles.pointsBtnRow}>
-              <Pressable style={styles.detailsBtn} onPress={() => openRewards('my')}>
-                <Text style={styles.detailsText}>Details</Text>
-              </Pressable>
-              <Pressable style={styles.claimBtn} onPress={() => openRewards('all')}>
-                <Text style={styles.claimText}>Claim Reward</Text>
-                <Feather name="chevron-right" size={14} color={colors.heading} />
-              </Pressable>
-            </View>
-          </LinearGradient>
+          <View ref={rewardsRef} onLayout={captureY('rewards')} style={styles.pointsWrap}>
+            <LinearGradient colors={[colors.pointsTop, colors.pointsBottom] as const} style={styles.pointsCard}>
+              <Image source={images.logo} style={styles.pointsLogo} resizeMode="contain" />
+              <Text style={styles.pointsLabel}>Superkalan Gaz Points</Text>
+              <Text style={styles.pointsValue}>163</Text>
+              <View style={styles.pointsBtnRow}>
+                <Pressable style={styles.detailsBtn} onPress={() => openRewards('my')}>
+                  <Text style={styles.detailsText}>Details</Text>
+                </Pressable>
+                <Pressable style={styles.claimBtn} onPress={() => openRewards('all')}>
+                  <Text style={styles.claimText}>Claim Reward</Text>
+                  <Feather name="chevron-right" size={14} color={colors.heading} />
+                </Pressable>
+              </View>
+            </LinearGradient>
+          </View>
 
           {/* Active Orders */}
-          <View style={styles.section}>
+          <View style={styles.section} onLayout={captureY('active')}>
             <Text style={styles.sectionTitle}>Active Orders</Text>
-            <Pressable style={styles.activeCard} onPress={() => onNavigate('orders', { tab: 'orders' })}>
+            <Pressable ref={activeRef} style={styles.activeCard} onPress={() => onNavigate('orders', { tab: 'orders' })}>
               <View style={styles.activeBody}>
                 <Image source={cylinderFor('11 KG')} style={styles.activeCyl} resizeMode="contain" />
                 <View style={styles.activeInfo}>
@@ -105,7 +205,7 @@ export function HomeScreen({
           </View>
 
           {/* Order again */}
-          <View style={{ marginTop: 20 }}>
+          <View ref={reorderRef} style={{ marginTop: 20 }} onLayout={captureY('reorder')}>
             <View style={styles.sectionHeadRow}>
               <Text style={styles.sectionTitle}>Order again</Text>
               <Feather name="chevron-right" size={20} color={colors.primary} />
@@ -122,10 +222,15 @@ export function HomeScreen({
           </View>
 
           {/* Quick Order */}
-          <View style={styles.section}>
+          <View style={styles.section} onLayout={captureY('quick')}>
             <Text style={[styles.sectionTitle, { marginBottom: 4 }]}>Quick Order</Text>
             {QUICK_ORDER.map((p, idx) => (
-              <Pressable key={idx} style={styles.quickCard} onPress={() => onNavigate('order-process')}>
+              <Pressable
+                key={idx}
+                ref={idx === 0 ? quickRef : undefined}
+                style={styles.quickCard}
+                onPress={() => onNavigate('order-process')}
+              >
                 <View style={styles.quickLeft}>
                   <Text style={styles.quickSize}>{p.size}</Text>
                   <Image source={cylinderFor(p.size)} style={styles.quickCyl} resizeMode="contain" />
@@ -151,7 +256,7 @@ export function HomeScreen({
         onProfile={() => onNavigate('profile', { tab: 'profile' })}
         onOrders={() => onNavigate('orders', { tab: 'orders' })}
         onFaqs={() => onNavigate('faqs')}
-        onGuide={() => setGuideOpen(true)}
+        onGuide={openGuide}
         onLogout={() => setLogoutConfirm(true)}
       />
 
@@ -165,7 +270,14 @@ export function HomeScreen({
       />
 
       <PromoModal visible={promoOpen && !guideOpen && activeTab === 'home'} onClose={() => setPromoOpen(false)} />
-      <AppGuideOverlay visible={guideOpen} onClose={() => setGuideOpen(false)} />
+      <AppGuideOverlay
+        visible={guideOpen}
+        step={guideStep}
+        rect={guideRect}
+        onNext={guideNext}
+        onBack={guideBack}
+        onClose={() => setGuideOpen(false)}
+      />
     </View>
   );
 }
@@ -174,7 +286,8 @@ const styles = StyleSheet.create({
   flex: { flex: 1, backgroundColor: '#fff' },
   sheet: { flex: 1, backgroundColor: '#fff', borderTopLeftRadius: 24, borderTopRightRadius: 24, marginTop: -24 },
 
-  pointsCard: { marginHorizontal: 16, marginTop: 16, height: 158, borderRadius: radii.card, padding: 16, ...cardShadow },
+  pointsWrap: { marginHorizontal: 16, marginTop: 16 },
+  pointsCard: { height: 158, borderRadius: radii.card, padding: 16, ...cardShadow },
   pointsLogo: { position: 'absolute', right: 44, top: 22, width: 110, height: 80, tintColor: 'rgba(255,255,255,0.9)' },
   pointsLabel: { fontFamily: fonts.medium, fontSize: 13, color: '#fff' },
   pointsValue: { fontFamily: fonts.semibold, fontSize: 40, color: '#fff', flex: 1, textAlignVertical: 'center', marginTop: 8 },

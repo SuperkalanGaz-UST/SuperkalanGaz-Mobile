@@ -1,3 +1,4 @@
+import { type Ref } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -15,10 +16,13 @@ export function AppHeader({
   name = 'Juan',
   onHelp,
   onMenu,
+  helpRef,
 }: {
   name?: string;
   onHelp?: () => void;
   onMenu?: () => void;
+  /** Ref on the help (?) icon, so the app guide can spotlight it. */
+  helpRef?: Ref<View>;
 }) {
   const insets = useSafeAreaInsets();
   return (
@@ -30,7 +34,7 @@ export function AppHeader({
         <Text style={styles.sub}>What can we do for you today?</Text>
       </View>
       <View style={styles.actions}>
-        <Pressable onPress={onHelp} hitSlop={8}>
+        <Pressable ref={helpRef} onPress={onHelp} hitSlop={8}>
           <Feather name="help-circle" size={24} color="#fff" />
         </Pressable>
         <Pressable onPress={onMenu} hitSlop={8}>
