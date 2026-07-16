@@ -1,34 +1,17 @@
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import { useAuth } from '@/contexts/AuthContext';
 import { AuthFlow } from '@/navigation/AuthFlow';
-import { HouseholdHomeScreen } from '@/screens/home/HouseholdHomeScreen';
-import { CommercialHomeScreen } from '@/screens/home/CommercialHomeScreen';
+import { MainApp } from '@/navigation/MainApp';
 import { colors } from '@/theme/colors';
 
 /**
- * Top-level navigation gate. Chooses between the auth flow (signed out) and the
- * customer app (signed in), or a splash while the session restores.
- *
- * Signed in, the app opens the rewards home for the customer's account type:
- * Household (points) vs Commercial (30+1 exchange). The account type comes from
- * the login tab (see AuthContext); an unknown type defaults to Household.
- *
- * SCAFFOLD: each account type currently shows a single home screen. Introduce
- * React Navigation here when the customer tabs land —
- *   <NavigationContainer>
- *     {session ? <AppTabs /> : <AuthStack />}
- *   </NavigationContainer>
- * with these customer-only surfaces (no staff/admin):
- *   - AuthStack   → screens/auth      (LoginScreen · register)
- *   - AppTabs
- *       · Home    → screens/home      (dashboard / reorder)
- *       · Orders  → screens/orders    (place order · track delivery MILESTONES only)
- *       · Loyalty → screens/loyalty   (points / rewards)
- *       · Profile → screens/profile   (CIM: profile, addresses, purchase history)
- *   - Feedback    → screens/feedback  (CSAT rating · complaint) — reached post-delivery
+ * Top-level session gate. The real Supabase session decides which state machine
+ * is mounted: the signed-out auth flow (login/signup/OTP/forgot) or the signed-in
+ * customer app (Home/Orders/Profile/Order flow/FAQs). A successful sign-in/up or
+ * sign-out flips the session and swaps the whole tree.
  */
 export function RootNavigator() {
-  const { session, accountType, initializing } = useAuth();
+  const { session, initializing } = useAuth();
 
   if (initializing) {
     return (
@@ -38,12 +21,7 @@ export function RootNavigator() {
     );
   }
 
-  if (!session) {
-    return <AuthFlow />;
-  }
-
-  // Signed in — route to the rewards home for this account type.
-  return accountType === 'commercial' ? <CommercialHomeScreen /> : <HouseholdHomeScreen />;
+  return session ? <MainApp /> : <AuthFlow />;
 }
 
 const styles = StyleSheet.create({
@@ -51,7 +29,7 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: colors.loginBackground,
+    backgroundColor: colors.authBg,
     padding: 24,
   },
 });

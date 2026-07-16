@@ -1,427 +1,227 @@
 import { useState } from 'react';
-import {
-  KeyboardAvoidingView,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Switch,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Feather, Ionicons } from '@expo/vector-icons';
+import { Modal, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
+import { Feather } from '@expo/vector-icons';
 import { useAuth } from '@/contexts/AuthContext';
-import { BottomTabBar } from '@/screens/home/homeShared';
-import { PasswordResetSheet } from '@/screens/profile/PasswordResetSheet';
 import { colors } from '@/theme/colors';
 import { fonts } from '@/theme/fonts';
+import { radii } from '@/theme/metrics';
+import { AppHeader } from '@/components/ui/AppHeader';
+import { BottomNav } from '@/components/ui/BottomNav';
+import { SideMenu } from '@/components/ui/SideMenu';
+import { LogoutConfirmModal } from '@/components/ui/overlays';
+import type { MainScreen, MainTab } from '@/navigation/types';
 
 /**
- * Customer profile (Figma "My Profile"). Shows the account's personal details
- * over the shared blue banner + avatar hero, with a Personal Details / Account
- * Preferences tab switch and an Edit toggle that unlocks the fields. Reuses the
- * app's BottomTabBar with "Profile" active so it reads as one product.
+ * Profile (Figma "MyProfile"): personal details (view/edit), reset-password sheet,
+ * and account preferences toggles. Maps to the CIM module (AGENTS.md §8).
  *
- * SCAFFOLD: fields are seeded from the Supabase session's user metadata (set at
- * sign-up) and fall back to the Figma sample values. Saving, the avatar photo
- * upload, and Reset Password are visual for now — wire them to the customer
- * profile endpoint of the shared API (src/lib/api.ts) once it lands (AGENTS.md §4).
+ * SCAFFOLD: profile fields are Figma mock — load/persist via the CIM endpoint.
  */
-interface ProfileScreenProps {
-  /** Return to the previous screen (back arrow + Home tab). */
-  onBack?: () => void;
-  /** Sign out of the account (kept available while testing). */
-  onSignOut?: () => void;
-}
+export function ProfileScreen({ onNavigate }: { onNavigate: (screen: MainScreen, opts?: { tab?: MainTab }) => void }) {
+  const { signOut } = useAuth();
+  const [tab, setTab] = useState<'personal' | 'preferences'>('personal');
+  const [editMode, setEditMode] = useState(false);
+  const [resetOpen, setResetOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [logoutConfirm, setLogoutConfirm] = useState(false);
 
-type ProfileTab = 'details' | 'preferences';
+  const [firstName, setFirstName] = useState('Juan');
+  const [lastName, setLastName] = useState('Dela Cruz');
+  const [email, setEmail] = useState('juandelacruz@email.com');
+  const [contact, setContact] = useState('09123456789');
+  const [address, setAddress] = useState('123 Main St., Metro Manila');
 
-export function ProfileScreen({ onBack, onSignOut }: ProfileScreenProps = {}) {
-  const insets = useSafeAreaInsets();
-  const { session } = useAuth();
-  const meta = (session?.user?.user_metadata ?? {}) as Record<string, unknown>;
-  const str = (v: unknown) => (typeof v === 'string' ? v : '');
+  const [emailNotif, setEmailNotif] = useState(true);
+  const [phoneNotif, setPhoneNotif] = useState(false);
+  const [twoFA, setTwoFA] = useState(true);
 
-  const [tab, setTab] = useState<ProfileTab>('details');
-  const [editing, setEditing] = useState(false);
-  const [resetVisible, setResetVisible] = useState(false);
+  const [currentPw, setCurrentPw] = useState('');
+  const [newPw, setNewPw] = useState('');
+  const [showCurrent, setShowCurrent] = useState(false);
+  const [showNew, setShowNew] = useState(false);
 
-  // SCAFFOLD: notification/security preferences are local for now — persist them
-  // to the customer profile endpoint of the shared API once it lands (AGENTS.md §4).
-  const [emailNotifs, setEmailNotifs] = useState(true);
-  const [phoneNotifs, setPhoneNotifs] = useState(false);
-  const [twoFactor, setTwoFactor] = useState(true);
-
-  // Seed from sign-up metadata; the Figma sample values stand in when empty.
-  const [firstName, setFirstName] = useState(str(meta.first_name) || 'Juan');
-  const [lastName, setLastName] = useState(str(meta.last_name) || 'Dela Cruz');
-  const [email, setEmail] = useState(str(session?.user?.email) || '');
-  const [contact, setContact] = useState(str(session?.user?.phone) || '');
-  const [address, setAddress] = useState(str(meta.address) || '');
-
-  const fullName = `${firstName} ${lastName}`.trim() || 'Customer';
-  // TODO: replace with the customer's real ID from the profile endpoint.
-  const customerId = 'CUST-1234';
-
-  const toggleEdit = () => {
-    // TODO: on save, PATCH the edited fields to the customer profile endpoint.
-    setEditing((v) => !v);
-  };
+  const fields: { label: string; value: string; set: (v: string) => void }[] = [
+    { label: 'First Name', value: firstName, set: setFirstName },
+    { label: 'Last Name', value: lastName, set: setLastName },
+    { label: 'Email (If Applicable)', value: email, set: setEmail },
+    { label: 'Contact Number', value: contact, set: setContact },
+    { label: 'Address', value: address, set: setAddress },
+  ];
 
   return (
-    <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <View style={styles.page}>
-        {/* Fixed header — stays put while the content below scrolls. */}
-        <View style={[styles.headerRow, { paddingTop: insets.top + 12 }]}>
-          <Pressable hitSlop={10} onPress={onBack} accessibilityLabel="Go back">
-            <Feather name="chevron-left" size={28} color={colors.heading} />
-          </Pressable>
-          <Text style={styles.headerTitle}>My Profile</Text>
-        </View>
+    <View style={styles.flex}>
+      <AppHeader onMenu={() => setMenuOpen(true)} />
 
-        <ScrollView
-          showsVerticalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled"
-          contentContainerStyle={{ paddingTop: 4, paddingBottom: insets.bottom + 108 }}
-        >
-          {/* Hero: blue banner + white card, with the avatar overlapping both */}
-          <View style={styles.hero}>
-            <View style={styles.banner} />
-
-            <View style={styles.card}>
-              <Text style={styles.name}>{fullName}</Text>
-              <Text style={styles.customerId}>CUSTOMER ID: {customerId}</Text>
-
-              {/* Tabs */}
-              <View style={styles.tabRow}>
-                <ProfileTabButton label="Personal Details" active={tab === 'details'} onPress={() => setTab('details')} />
-                <ProfileTabButton
-                  label="Account Preferences"
-                  active={tab === 'preferences'}
-                  onPress={() => setTab('preferences')}
-                />
-              </View>
-
-              {tab === 'details' ? (
-                <>
-                  <View style={styles.sectionRow}>
-                    <Text style={styles.sectionTitle}>Personal Details</Text>
-                    <Pressable
-                      onPress={toggleEdit}
-                      style={({ pressed }) => [styles.editBtn, editing && styles.editBtnActive, pressed && styles.pressedDim]}
-                    >
-                      <Feather name="edit-2" size={14} color={editing ? EDIT_ACTIVE_FG : '#FFFFFF'} />
-                      <Text style={[styles.editBtnText, editing && styles.editBtnTextActive]}>EDIT</Text>
-                    </Pressable>
-                  </View>
-
-                  <Field label="First Name" value={firstName} onChangeText={setFirstName} editing={editing} placeholder="Juan" />
-                  <Field label="Last Name" value={lastName} onChangeText={setLastName} editing={editing} placeholder="Dela Cruz" />
-                  <Field
-                    label="Email (If Applicable)"
-                    value={email}
-                    onChangeText={setEmail}
-                    editing={editing}
-                    placeholder="juandelacruz@email.com"
-                    keyboardType="email-address"
-                  />
-                  <Field
-                    label="Contact Number"
-                    value={contact}
-                    onChangeText={setContact}
-                    editing={editing}
-                    placeholder="09123456789"
-                    keyboardType="phone-pad"
-                  />
-                  <Field
-                    label="Address"
-                    value={address}
-                    onChangeText={setAddress}
-                    editing={editing}
-                    placeholder="123 Main St., Metro Manila"
-                  />
-
-                  {/* Password is never editable inline — it's changed via reset. */}
-                  <Text style={styles.fieldLabel}>Password</Text>
-                  <View style={styles.inputWrap}>
-                    <TextInput
-                      style={styles.input}
-                      value="••••••••••"
-                      editable={false}
-                      secureTextEntry
-                    />
-                  </View>
-                  <Pressable hitSlop={6} style={styles.resetWrap} onPress={() => setResetVisible(true)}>
-                    <Text style={styles.resetLink}>Reset Password</Text>
-                  </Pressable>
-                </>
-              ) : (
-                <View style={styles.preferences}>
-                  <Text style={styles.sectionTitle}>Account Preferences</Text>
-                  <PreferenceRow label="Email Notifications" value={emailNotifs} onValueChange={setEmailNotifs} />
-                  <PreferenceRow label="Phone Notifications" value={phoneNotifs} onValueChange={setPhoneNotifs} />
-                  <PreferenceRow label="2FA Security" value={twoFactor} onValueChange={setTwoFactor} />
-
-                  {onSignOut && (
-                    <Pressable
-                      onPress={onSignOut}
-                      style={({ pressed }) => [styles.signOutBtn, pressed && styles.pressedDim]}
-                    >
-                      <Feather name="log-out" size={16} color={colors.danger} />
-                      <Text style={styles.signOutText}>Sign out</Text>
-                    </Pressable>
-                  )}
-                </View>
-              )}
+      <ScrollView style={styles.sheet} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 130 }}>
+        {/* Avatar banner */}
+        <View style={styles.banner}>
+          <View style={styles.avatarWrap}>
+            <View style={styles.avatar}>
+              <Feather name="user" size={40} color="#fff" />
             </View>
-
-            {/* Avatar sits above the banner/card seam, centered. */}
-            <View style={styles.avatarWrap} pointerEvents="box-none">
-              <View style={styles.avatar}>
-                <Ionicons name="person" size={64} color="#FFFFFF" />
-              </View>
-              <Pressable style={styles.cameraBadge} accessibilityLabel="Change photo">
-                <Feather name="camera" size={16} color="#FFFFFF" />
-              </Pressable>
+            <View style={styles.cameraBadge}>
+              <Feather name="camera" size={14} color="#fff" />
             </View>
           </View>
-        </ScrollView>
+          <Text style={styles.bannerName}>Juan Dela Cruz</Text>
+          <Text style={styles.bannerId}>CUSTOMER ID: CUST-1234</Text>
+        </View>
 
-        <BottomTabBar active="profile" onHome={onBack} />
-      </View>
+        {/* Sub-tabs */}
+        <View style={styles.tabsWrap}>
+          <View style={{ flexDirection: 'row' }}>
+            {(['personal', 'preferences'] as const).map((t) => (
+              <Pressable key={t} style={styles.tabItem} onPress={() => setTab(t)}>
+                <Text style={[styles.tabText, { color: tab === t ? colors.primary : colors.muted }]}>
+                  {t === 'personal' ? 'Personal Details' : 'Account Preferences'}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+          <View style={styles.tabTrack}>
+            <View style={[styles.tabUnderline, { left: tab === 'personal' ? '0%' : '50%' }]} />
+          </View>
+        </View>
 
-      <PasswordResetSheet visible={resetVisible} onClose={() => setResetVisible(false)} />
-    </KeyboardAvoidingView>
-  );
-}
+        {tab === 'personal' ? (
+          <View style={styles.body}>
+            <View style={styles.sectionRow}>
+              <Text style={styles.sectionTitle}>Personal Details</Text>
+              <Pressable style={[styles.editBtn, { backgroundColor: editMode ? colors.cardBorder : colors.primary }]} onPress={() => setEditMode((e) => !e)}>
+                <Feather name="edit-2" size={11} color={editMode ? colors.muted : '#fff'} />
+                <Text style={[styles.editText, { color: editMode ? colors.muted : '#fff' }]}>EDIT</Text>
+              </Pressable>
+            </View>
+            {fields.map((f) => (
+              <View key={f.label} style={{ marginBottom: 12 }}>
+                <Text style={styles.fieldLabel}>{f.label}</Text>
+                {editMode ? (
+                  <TextInput style={styles.fieldInput} value={f.value} onChangeText={f.set} />
+                ) : (
+                  <View style={styles.fieldBox}>
+                    <Text style={styles.fieldValue}>{f.value}</Text>
+                  </View>
+                )}
+              </View>
+            ))}
+            <Text style={styles.fieldLabel}>Password</Text>
+            <View style={styles.fieldBox}>
+              <Text style={styles.fieldValue}>••••••••••</Text>
+            </View>
+            <Pressable onPress={() => setResetOpen(true)}>
+              <Text style={styles.resetLink}>Reset Password</Text>
+            </Pressable>
+          </View>
+        ) : (
+          <View style={styles.body}>
+            <Text style={styles.sectionTitle}>Account Preferences</Text>
+            {[
+              { label: 'Email Notifications', value: emailNotif, set: setEmailNotif },
+              { label: 'Phone Notifications', value: phoneNotif, set: setPhoneNotif },
+              { label: '2FA Security', value: twoFA, set: setTwoFA },
+            ].map((p) => (
+              <View key={p.label} style={styles.prefRow}>
+                <Text style={styles.prefLabel}>{p.label}</Text>
+                <Switch
+                  value={p.value}
+                  onValueChange={p.set}
+                  trackColor={{ true: colors.primary, false: '#ccc' }}
+                  thumbColor="#fff"
+                />
+              </View>
+            ))}
+          </View>
+        )}
+      </ScrollView>
 
-function ProfileTabButton({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
-  return (
-    <Pressable style={styles.tabBtn} onPress={onPress}>
-      <Text style={[styles.tabText, active ? styles.tabTextActive : styles.tabTextInactive]}>{label}</Text>
-      <View style={[styles.tabUnderline, active && styles.tabUnderlineActive]} />
-    </Pressable>
-  );
-}
+      {/* Reset password sheet */}
+      <Modal visible={resetOpen} transparent animationType="slide" onRequestClose={() => setResetOpen(false)}>
+        <Pressable style={styles.sheetBackdrop} onPress={() => setResetOpen(false)} />
+        <View style={styles.resetSheet}>
+          <View style={styles.resetHead}>
+            <Text style={styles.resetTitle}>Password reset</Text>
+            <Pressable onPress={() => setResetOpen(false)} hitSlop={8}>
+              <Feather name="x" size={16} color={colors.gray} />
+            </Pressable>
+          </View>
+          <Text style={styles.fieldLabel}>Current Password</Text>
+          <View style={styles.pwRow}>
+            <TextInput style={styles.pwInput} secureTextEntry={!showCurrent} value={currentPw} onChangeText={setCurrentPw} />
+            <Pressable onPress={() => setShowCurrent((s) => !s)} hitSlop={8}>
+              <Feather name={showCurrent ? 'eye' : 'eye-off'} size={20} color={colors.grayText} />
+            </Pressable>
+          </View>
+          <Text style={[styles.fieldLabel, { marginTop: 16 }]}>New Password</Text>
+          <View style={styles.pwRow}>
+            <TextInput style={styles.pwInput} secureTextEntry={!showNew} value={newPw} onChangeText={setNewPw} />
+            <Pressable onPress={() => setShowNew((s) => !s)} hitSlop={8}>
+              <Feather name={showNew ? 'eye' : 'eye-off'} size={20} color={colors.grayText} />
+            </Pressable>
+          </View>
+          <View style={styles.resetBtns}>
+            <Pressable style={[styles.resetBtn, { backgroundColor: colors.cardBorder }]} onPress={() => setResetOpen(false)}>
+              <Text style={[styles.resetBtnText, { color: colors.muted }]}>CANCEL</Text>
+            </Pressable>
+            <Pressable style={[styles.resetBtn, { backgroundColor: colors.primary }]} onPress={() => { setResetOpen(false); setCurrentPw(''); setNewPw(''); }}>
+              <Text style={[styles.resetBtnText, { color: '#fff' }]}>CONFIRM</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
 
-/** A labelled profile field — read-only until Edit is toggled on. */
-function Field({
-  label,
-  value,
-  onChangeText,
-  editing,
-  placeholder,
-  keyboardType,
-}: {
-  label: string;
-  value: string;
-  onChangeText: (v: string) => void;
-  editing: boolean;
-  placeholder?: string;
-  keyboardType?: 'default' | 'email-address' | 'phone-pad';
-}) {
-  return (
-    <>
-      <Text style={styles.fieldLabel}>{label}</Text>
-      <View style={styles.inputWrap}>
-        <TextInput
-          style={[styles.input, !editing && styles.inputReadOnly]}
-          value={value}
-          onChangeText={onChangeText}
-          editable={editing}
-          placeholder={placeholder}
-          placeholderTextColor={PLACEHOLDER}
-          keyboardType={keyboardType ?? 'default'}
-          autoCapitalize={keyboardType === 'email-address' ? 'none' : 'sentences'}
-          autoCorrect={false}
-        />
-      </View>
-    </>
-  );
-}
-
-/** A labelled preference row with a right-aligned toggle (Figma). */
-function PreferenceRow({
-  label,
-  value,
-  onValueChange,
-}: {
-  label: string;
-  value: boolean;
-  onValueChange: (v: boolean) => void;
-}) {
-  return (
-    <View style={styles.prefRow}>
-      <Text style={styles.prefLabel}>{label}</Text>
-      <Switch
-        style={styles.prefSwitch}
-        value={value}
-        onValueChange={onValueChange}
-        trackColor={{ true: colors.primary, false: TRACK_OFF }}
-        thumbColor="#FFFFFF"
-        ios_backgroundColor={TRACK_OFF}
+      <BottomNav active="profile" onNavigate={onNavigate} />
+      <SideMenu
+        visible={menuOpen}
+        onClose={() => setMenuOpen(false)}
+        onProfile={() => setTab('personal')}
+        onOrders={() => onNavigate('orders', { tab: 'orders' })}
+        onFaqs={() => onNavigate('faqs')}
+        onGuide={() => onNavigate('home', { tab: 'home' })}
+        onLogout={() => setLogoutConfirm(true)}
       />
+      <LogoutConfirmModal visible={logoutConfirm} onConfirm={() => { setLogoutConfirm(false); signOut(); }} onCancel={() => setLogoutConfirm(false)} />
     </View>
   );
 }
 
-// Local palette for shades specific to this screen (kept beside the styles that
-// use them, matching the login screen's local-shadow convention).
-const AVATAR_GRAY = '#9E9E9E';
-const FIELD_BORDER = '#CBD2D8';
-const PLACEHOLDER = '#9AA0A6';
-const AVATAR = 132;
-// Edit button's active (editing) state — a flat gray chip (Figma).
-const EDIT_ACTIVE_BG = '#D6D6D6';
-const EDIT_ACTIVE_FG = '#7A7A7A';
-// Preference rows: light gray fill + gray "off" toggle track (Figma).
-const PREF_ROW_BG = '#F1F2F3';
-const TRACK_OFF = '#9A9A9A';
-
-const cardShadow = {
-  shadowColor: '#0A2540',
-  shadowOffset: { width: 0, height: 6 },
-  shadowOpacity: 0.1,
-  shadowRadius: 16,
-  elevation: 5,
-};
-
 const styles = StyleSheet.create({
-  flex: { flex: 1 },
-  page: { flex: 1, backgroundColor: colors.surface },
-  pressedDim: { opacity: 0.85 },
+  flex: { flex: 1, backgroundColor: '#fff' },
+  sheet: { flex: 1, backgroundColor: '#fff', borderTopLeftRadius: 24, borderTopRightRadius: 24, marginTop: -24 },
 
-  // Header
-  headerRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, gap: 10, marginBottom: 8 },
-  headerTitle: { fontSize: 24, fontFamily: fonts.bold, color: colors.heading },
+  banner: { marginHorizontal: 16, marginTop: 16, borderRadius: 20, backgroundColor: colors.primary, alignItems: 'center', paddingVertical: 16 },
+  avatarWrap: { marginTop: 8 },
+  avatar: { width: 90, height: 90, borderRadius: 45, backgroundColor: colors.avatarGray, alignItems: 'center', justifyContent: 'center', borderWidth: 3, borderColor: '#e0e2e6' },
+  cameraBadge: { position: 'absolute', bottom: 0, right: 0, width: 28, height: 28, borderRadius: 14, backgroundColor: colors.primary, borderWidth: 2, borderColor: '#fff', alignItems: 'center', justifyContent: 'center' },
+  bannerName: { fontFamily: fonts.bold, fontSize: 18, color: '#fff', marginTop: 8 },
+  bannerId: { fontFamily: fonts.regular, fontSize: 10, color: colors.navInactive, marginTop: 2 },
 
-  // Hero (blue banner + white card + overlapping avatar)
-  hero: { paddingHorizontal: 16 },
-  banner: {
-    height: 130,
-    backgroundColor: colors.primary,
-    borderRadius: 24,
-    marginTop: AVATAR * 0.42,
-  },
-  card: {
-    backgroundColor: colors.surface,
-    borderRadius: 24,
-    marginTop: -70,
-    paddingTop: AVATAR * 0.5 + 18,
-    paddingHorizontal: 20,
-    paddingBottom: 24,
-    ...cardShadow,
-  },
+  tabsWrap: { paddingHorizontal: 24, marginTop: 16 },
+  tabItem: { flex: 1, alignItems: 'center', paddingBottom: 8 },
+  tabText: { fontFamily: fonts.semibold, fontSize: 11 },
+  tabTrack: { height: 1, backgroundColor: colors.divider },
+  tabUnderline: { position: 'absolute', top: 0, height: 2, width: '50%', backgroundColor: colors.primary },
 
-  // Avatar
-  avatarWrap: { position: 'absolute', top: 0, left: 0, right: 0, alignItems: 'center' },
-  avatar: {
-    width: AVATAR,
-    height: AVATAR,
-    borderRadius: AVATAR / 2,
-    backgroundColor: AVATAR_GRAY,
-    alignItems: 'center',
-    justifyContent: 'center',
-    ...cardShadow,
-  },
-  cameraBadge: {
-    position: 'absolute',
-    right: '50%',
-    bottom: 4,
-    marginRight: -AVATAR / 2 + 6,
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    backgroundColor: colors.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 3,
-    borderColor: colors.surface,
-  },
+  body: { paddingHorizontal: 24, marginTop: 16 },
+  sectionRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 },
+  sectionTitle: { fontFamily: fonts.bold, fontSize: 16, color: colors.primary },
+  editBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 12, paddingVertical: 4, borderRadius: radii.chip },
+  editText: { fontFamily: fonts.bold, fontSize: 10 },
+  fieldLabel: { fontFamily: fonts.regular, fontSize: 10, color: colors.label, marginBottom: 4 },
+  fieldBox: { height: 38, borderWidth: 1, borderColor: colors.muted, borderRadius: radii.card, paddingHorizontal: 12, justifyContent: 'center' },
+  fieldValue: { fontFamily: fonts.regular, fontSize: 14, color: colors.muted },
+  fieldInput: { height: 38, borderWidth: 1, borderColor: colors.muted, borderRadius: radii.card, paddingHorizontal: 12, fontFamily: fonts.regular, fontSize: 14, color: colors.heading },
+  resetLink: { fontFamily: fonts.regular, fontSize: 10, color: colors.primary, marginTop: 4 },
 
-  // Name + ID
-  name: { fontSize: 24, fontFamily: fonts.bold, color: colors.heading, textAlign: 'center' },
-  customerId: {
-    fontSize: 13,
-    fontFamily: fonts.semibold,
-    color: colors.navInactive,
-    textAlign: 'center',
-    letterSpacing: 0.5,
-    marginTop: 4,
-  },
+  prefRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: colors.prefRowBg, borderRadius: 12, paddingHorizontal: 12, height: 48, marginBottom: 8 },
+  prefLabel: { fontFamily: fonts.semibold, fontSize: 12, color: '#000' },
 
-  // Tabs
-  tabRow: { flexDirection: 'row', marginTop: 18, marginBottom: 8 },
-  tabBtn: { flex: 1, alignItems: 'center' },
-  tabText: { fontSize: 14, fontFamily: fonts.semibold, paddingBottom: 8 },
-  tabTextActive: { color: colors.primary },
-  tabTextInactive: { color: colors.textMuted },
-  tabUnderline: { height: 2, alignSelf: 'stretch', backgroundColor: colors.border },
-  tabUnderlineActive: { backgroundColor: colors.primary },
-
-  // Section header + Edit
-  sectionRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 20 },
-  sectionTitle: { fontSize: 20, fontFamily: fonts.bold, color: colors.primary },
-  editBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: colors.primary,
-    paddingHorizontal: 16,
-    height: 34,
-    borderRadius: 8,
-    ...cardShadow,
-  },
-  editBtnActive: { backgroundColor: EDIT_ACTIVE_BG, shadowOpacity: 0, elevation: 0 },
-  editBtnText: { fontSize: 13, fontFamily: fonts.semibold, color: '#FFFFFF' },
-  editBtnTextActive: { color: EDIT_ACTIVE_FG },
-
-  // Fields
-  fieldLabel: { fontSize: 14, fontFamily: fonts.semibold, color: colors.label, marginTop: 18, marginBottom: 8 },
-  inputWrap: {
-    borderWidth: 1,
-    borderColor: FIELD_BORDER,
-    borderRadius: 12,
-    justifyContent: 'center',
-    backgroundColor: colors.surface,
-  },
-  input: { height: 52, paddingHorizontal: 16, fontSize: 15, fontFamily: fonts.regular, color: colors.label },
-  inputReadOnly: { color: PLACEHOLDER },
-
-  resetWrap: { marginTop: 14 },
-  resetLink: { fontSize: 14, fontFamily: fonts.semibold, color: colors.primary },
-
-  // Account Preferences
-  preferences: { paddingTop: 4 },
-  prefRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: PREF_ROW_BG,
-    borderRadius: 12,
-    paddingHorizontal: 20,
-    // Content height (label + switch) rather than a fixed height, so neither
-    // child can float within leftover vertical slack.
-    minHeight: 64,
-    paddingVertical: 12,
-    marginTop: 16,
-  },
-  prefLabel: { fontSize: 16, fontFamily: fonts.semibold, color: colors.text },
-  prefSwitch: { alignSelf: 'center' },
-  signOutBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    alignSelf: 'center',
-    gap: 8,
-    borderWidth: 1,
-    borderColor: colors.danger,
-    paddingHorizontal: 20,
-    height: 44,
-    borderRadius: 12,
-    marginTop: 32,
-  },
-  signOutText: { fontSize: 14, fontFamily: fonts.semibold, color: colors.danger },
+  sheetBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.3)' },
+  resetSheet: { backgroundColor: '#fff', borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingHorizontal: 24, paddingTop: 24, paddingBottom: 32 },
+  resetHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 },
+  resetTitle: { fontFamily: fonts.semibold, fontSize: 20, color: colors.heading },
+  pwRow: { flexDirection: 'row', alignItems: 'center', height: 38, borderWidth: 1, borderColor: colors.muted, borderRadius: radii.card, paddingHorizontal: 12 },
+  pwInput: { flex: 1, fontFamily: fonts.regular, fontSize: 14, color: colors.heading, padding: 0 },
+  resetBtns: { flexDirection: 'row', gap: 12, marginTop: 24 },
+  resetBtn: { flex: 1, height: 38, borderRadius: radii.button, alignItems: 'center', justifyContent: 'center' },
+  resetBtnText: { fontFamily: fonts.bold, fontSize: 12 },
 });
