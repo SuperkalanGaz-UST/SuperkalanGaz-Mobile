@@ -9,6 +9,7 @@ import {
   SetPasswordScreen,
   SuccessScreen,
 } from '@/screens/auth/ForgotFlow';
+import { useAuth } from '@/contexts/AuthContext';
 import type { AccountType, AuthScreen, InputMode, OtpVariant, SignupDraft } from '@/navigation/types';
 
 /**
@@ -17,6 +18,7 @@ import type { AccountType, AuthScreen, InputMode, OtpVariant, SignupDraft } from
  * sign-in/up flips the Supabase session; RootNavigator then swaps in the app.
  */
 export function AuthFlow() {
+  const { signUp } = useAuth();
   const [screen, setScreen] = useState<AuthScreen>('login');
   const [account, setAccount] = useState<AccountType>('household');
   const [input, setInput] = useState<InputMode>('email');
@@ -31,14 +33,34 @@ export function AuthFlow() {
           <SignUpScreen
             account={account}
             input={input}
+            initialDraft={draft}
             onInputChange={setInput}
-            onBack={() => setScreen('login')}
-            onNext={(d) => {
+            onBack={() => {
+              setDraft(null);
+              setScreen('login');
+            }}
+            onNext={async (d) => {
+              const { error, needsConfirmation } = await signUp({
+                method: d.input,
+                identifier: d.contact,
+                password: d.password,
+                firstName: d.firstName,
+                lastName: d.lastName,
+                address: d.address,
+                accountType: d.accountType,
+              });
+              if (error) return error;
+
+              // When confirmation is disabled Supabase returns a session and the
+              // root navigator replaces this flow. Otherwise, show the code UI.
+              if (!needsConfirmation) return null;
+
               setDraft(d);
               setOtpVariant(
                 d.input === 'phone' ? (d.accountType === 'commercial' ? 'sms' : 'phone') : 'email',
               );
               setScreen('otp');
+              return null;
             }}
           />
         );
@@ -48,10 +70,6 @@ export function AuthFlow() {
             variant={otpVariant}
             draft={draft}
             onBack={() => setScreen('signup')}
-            onNeedsConfirmation={(msg) => {
-              setNotice(msg);
-              setScreen('login');
-            }}
           />
         );
       case 'forgot':
@@ -77,6 +95,7 @@ export function AuthFlow() {
             }}
             onSignUp={() => {
               setNotice('');
+              setDraft(null);
               setScreen('signup');
             }}
           />

@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useEffect, useState } from 'react';
+import { BackHandler, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@/contexts/AuthContext';
@@ -20,53 +20,63 @@ const DESCS: Record<OtpVariant, string> = {
 };
 
 /**
- * OTP verification (Figma "LogInProcess" OTP). On Verify we actually create the
- * account via Supabase using the collected draft. A project requiring email/SMS
- * confirmation returns no session — we bounce back to Login with a notice.
- *
- * SCAFFOLD: the six-digit entry is presentational; real OTP delivery/verification
- * is wired when the API exposes it. Account creation itself is real.
+ * OTP verification (Figma "LogInProcess" OTP). Supabase owns code generation,
+ * expiry, delivery and verification; email delivery uses the custom SMTP
+ * provider configured for the Supabase project.
  */
 export function OtpScreen({
   variant,
   draft,
   onBack,
-  onNeedsConfirmation,
 }: {
   variant: OtpVariant;
   draft: SignupDraft | null;
   onBack: () => void;
-  onNeedsConfirmation: (message: string) => void;
 }) {
   const insets = useSafeAreaInsets();
-  const { signUp } = useAuth();
+  const { verifySignUpOtp, resendSignUpOtp } = useAuth();
   const [digits, setDigits] = useState<string[]>(Array(6).fill(''));
   const [busy, setBusy] = useState(false);
+  const [resending, setResending] = useState(false);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const filled = digits.every((d) => d !== '');
+
+  useEffect(() => {
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      onBack();
+      return true;
+    });
+    return () => subscription.remove();
+  }, [onBack]);
 
   const handleVerify = async () => {
     if (!filled || !draft) return;
     setBusy(true);
     setError('');
-    const { error: err, needsConfirmation } = await signUp({
-      method: draft.input,
-      identifier: draft.contact,
-      password: draft.password,
-      firstName: draft.firstName,
-      lastName: draft.lastName,
-      address: draft.address,
-      accountType: draft.accountType,
-    });
+    setNotice('');
+    const { error: err } = await verifySignUpOtp(draft.input, draft.contact, digits.join(''));
     setBusy(false);
+    if (err) {
+      setError(err);
+    }
+    // A successful verification creates the session; RootNavigator then swaps
+    // this signed-out flow for the customer app.
+  };
+
+  const handleResend = async () => {
+    if (!draft || resending) return;
+    setResending(true);
+    setError('');
+    setNotice('');
+    const { error: err } = await resendSignUpOtp(draft.input, draft.contact);
+    setResending(false);
     if (err) {
       setError(err);
       return;
     }
-    if (needsConfirmation) {
-      onNeedsConfirmation('Account created. Please verify, then sign in.');
-    }
-    // Otherwise the session flips and RootNavigator swaps to the app.
+    setDigits(Array(6).fill(''));
+    setNotice('A new code has been sent.');
   };
 
   return (
@@ -87,14 +97,25 @@ export function OtpScreen({
       </View>
 
       {error ? <Text style={styles.error}>{error}</Text> : null}
+      {notice ? <Text style={styles.notice}>{notice}</Text> : null}
 
       <Text style={styles.resend}>
         Didn't get the code?{' '}
-        <Text style={styles.resendLink}>Resend code</Text>
+        <Text
+          style={styles.resendLink}
+          onPress={() => void handleResend()}
+          suppressHighlighting
+        >
+          {resending ? 'Sending…' : 'Resend code'}
+        </Text>
       </Text>
 
       <View style={{ marginTop: 40 }}>
-        <DarkButton label={busy ? 'Verifying…' : 'Verify'} onPress={handleVerify} disabled={!filled || busy} />
+        <DarkButton
+          label={busy ? 'Verifying…' : 'Verify'}
+          onPress={() => void handleVerify()}
+          disabled={!filled || busy || resending}
+        />
       </View>
     </ScrollView>
   );
@@ -107,6 +128,7 @@ const styles = StyleSheet.create({
   title: { fontFamily: fonts.bold, fontSize: 26, color: colors.heading, textAlign: 'center', marginBottom: 40 },
   desc: { fontFamily: fonts.regular, fontSize: 14, color: colors.muted, textAlign: 'center', marginBottom: 32 },
   error: { fontFamily: fonts.regular, fontSize: 12, color: colors.danger, textAlign: 'center', marginBottom: 12 },
+  notice: { fontFamily: fonts.regular, fontSize: 12, color: colors.success, textAlign: 'center', marginBottom: 12 },
   resend: { textAlign: 'center', fontFamily: fonts.regular, fontSize: 11, color: colors.grayText },
   resendLink: { color: colors.signupLink, textDecorationLine: 'underline' },
 });

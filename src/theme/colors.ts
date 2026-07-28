@@ -35,7 +35,7 @@ export const colors = {
   scrim: 'rgba(2,20,34,0.45)',
 
   // --- Home / Quick Order (Figma landing) ---
-  helloAccent: '#81D1FF', // the "Juan" in the header greeting
+  helloAccent: '#81D1FF', // the customer's first name in the header greeting
   pointsTop: '#044674', // points card gradient — top (dark)
   pointsBottom: '#0883DA', // points card gradient — bottom (light)
   homeSheet: '#FFFFFF', // white rounded sheet under the blue header

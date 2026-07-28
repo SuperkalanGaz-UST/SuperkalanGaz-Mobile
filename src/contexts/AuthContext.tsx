@@ -52,11 +52,21 @@ interface AuthContextValue {
     accountType: AccountType,
   ) => Promise<{ error: string | null }>;
   /**
-   * Register a new customer via Supabase Auth. `needsConfirmation` is true when
-   * the project requires email/SMS verification (no session yet) — the caller
-   * should tell the user to verify, then sign in.
+   * Register a new customer and request the signup code from Supabase Auth.
+   * `needsConfirmation` is true when the caller must show the OTP screen.
    */
   signUp: (input: SignUpInput) => Promise<{ error: string | null; needsConfirmation: boolean }>;
+  /** Confirm the email or SMS code that Supabase sent for a pending signup. */
+  verifySignUpOtp: (
+    method: SignUpInput['method'],
+    identifier: string,
+    token: string,
+  ) => Promise<{ error: string | null }>;
+  /** Ask Supabase to send a fresh signup code through the configured provider. */
+  resendSignUpOtp: (
+    method: SignUpInput['method'],
+    identifier: string,
+  ) => Promise<{ error: string | null }>;
   signOut: () => Promise<void>;
 }
 
@@ -125,6 +135,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         await AsyncStorage.setItem(ACCOUNT_TYPE_KEY, input.accountType);
         // No session back means the project requires email/SMS confirmation first.
         return { error: null, needsConfirmation: !data.session };
+      },
+      verifySignUpOtp: async (method, identifier, token) => {
+        const { error } =
+          method === 'email'
+            ? await supabase.auth.verifyOtp({
+                email: identifier,
+                token,
+                type: 'email',
+              })
+            : await supabase.auth.verifyOtp({
+                phone: identifier,
+                token,
+                type: 'sms',
+              });
+        return { error: error?.message ?? null };
+      },
+      resendSignUpOtp: async (method, identifier) => {
+        const { error } =
+          method === 'email'
+            ? await supabase.auth.resend({
+                type: 'signup',
+                email: identifier,
+              })
+            : await supabase.auth.resend({
+                type: 'sms',
+                phone: identifier,
+              });
+        return { error: error?.message ?? null };
       },
       signOut: async () => {
         await supabase.auth.signOut();

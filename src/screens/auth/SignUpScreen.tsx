@@ -24,28 +24,34 @@ import type { AccountType, InputMode, SignupDraft } from '@/navigation/types';
 export function SignUpScreen({
   account,
   input,
+  initialDraft,
   onInputChange,
   onBack,
   onNext,
 }: {
   account: AccountType;
   input: InputMode;
+  /** Restores the form when the customer returns from OTP; never persisted to storage. */
+  initialDraft: SignupDraft | null;
   onInputChange: (v: InputMode) => void;
   onBack: () => void;
-  onNext: (draft: SignupDraft) => void;
+  onNext: (draft: SignupDraft) => Promise<string | null>;
 }) {
   const insets = useSafeAreaInsets();
   const isCommercial = account === 'commercial';
   const isPhone = input === 'phone';
 
-  const [firstName, setFirstName] = useState('');
-  const [lastName, setLastName] = useState('');
-  const [address, setAddress] = useState('');
-  const [contact, setContact] = useState('');
-  const [password, setPassword] = useState('');
+  const [firstName, setFirstName] = useState(initialDraft?.firstName ?? '');
+  const [lastName, setLastName] = useState(initialDraft?.lastName ?? '');
+  const [address, setAddress] = useState(initialDraft?.address ?? '');
+  const [contact, setContact] = useState(initialDraft?.contact ?? '');
+  const [password, setPassword] = useState(initialDraft?.password ?? '');
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
 
-  const handleNext = () => {
+  const handleNext = async () => {
+    if (busy) return;
+
     const e: Record<string, string> = {};
     if (!firstName.trim()) e.firstName = 'Required';
     if (!lastName.trim()) e.lastName = 'Required';
@@ -58,19 +64,24 @@ export function SignUpScreen({
       const n = normalizePhMobile(contact);
       if (!n) e.contact = 'Enter a valid PH mobile number';
       else normalized = n;
+    } else if (contact.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact.trim())) {
+      e.contact = 'Enter a valid email address';
     }
     setErrors(e);
     if (Object.keys(e).length > 0) return;
 
-    onNext({
+    setBusy(true);
+    const submitError = await onNext({
       firstName: firstName.trim(),
       lastName: lastName.trim(),
       address: address.trim(),
-      contact: normalized,
+      contact: isPhone ? normalized : normalized.toLowerCase(),
       password,
       accountType: account,
       input,
     });
+    setBusy(false);
+    if (submitError) setErrors({ form: submitError });
   };
 
   return (
@@ -136,7 +147,14 @@ export function SignUpScreen({
 
         <TextField label="Password" placeholder="••••••••••" secure value={password} onChangeText={setPassword} error={errors.password} />
 
-        <PrimaryButton label="Next" onPress={handleNext} style={{ marginTop: 8 }} />
+        {errors.form ? <Text style={styles.formError}>{errors.form}</Text> : null}
+
+        <PrimaryButton
+          label={busy ? 'Sending code…' : 'Next'}
+          onPress={() => void handleNext()}
+          disabled={busy}
+          style={{ marginTop: 8 }}
+        />
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -151,4 +169,5 @@ const styles = StyleSheet.create({
   toggleWrap: { marginHorizontal: 16 },
   row: { flexDirection: 'row', gap: 16 },
   rowItem: { flex: 1 },
+  formError: { fontFamily: fonts.regular, fontSize: 12, color: colors.danger, textAlign: 'center' },
 });

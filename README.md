@@ -67,6 +67,39 @@ cp .env.example .env                # then fill in API + Supabase values
 npx expo start
 ```
 
+## Google SMTP for email verification codes
+
+Supabase Auth owns signup-code generation and verification. Google SMTP is
+configured in Supabase rather than in this mobile app, so the Google password is
+never bundled into the Expo build.
+
+1. Turn on 2-Step Verification for the Google or Google Workspace sender account,
+   then create an App Password for Supabase.
+2. In the Supabase dashboard, open **Authentication → SMTP Settings**, enable
+   custom SMTP, and enter:
+   - Host: `smtp.gmail.com`
+   - Port: `587`
+   - Username: the complete Google email address
+   - Password: the 16-character Google App Password (not the normal account password)
+   - Sender email: the same Google email address
+   - Sender name: `Superkalan Gaz`
+3. Keep email confirmation enabled. Under **Authentication → Email Templates → Confirm signup**,
+   make the template display the OTP with `{{ .Token }}`. For example:
+
+   ```html
+   <h2>Verify your Superkalan Gaz account</h2>
+   <p>Your verification code is:</p>
+   <p style="font-size: 32px; font-weight: 700; letter-spacing: 8px;">{{ .Token }}</p>
+   <p>If you did not create this account, you can ignore this email.</p>
+   ```
+4. Under **Authentication → Sign In / Providers → Email**, set **Email OTP length** to
+   `6`. This must match the mobile app's six-box OTP input. The equivalent Management API
+   setting is `mailer_otp_length: 6`.
+
+The mobile sign-up flow calls `signUp` before opening the OTP screen, verifies
+the entered code with `verifyOtp`, and supports requesting a fresh code. No SMTP
+credential belongs in `.env`, `.env.example`, or client-side TypeScript.
+
 ## Conventions
 
 - Customer-only: **no staff/admin screens**, and **no map with live coordinates** — milestones

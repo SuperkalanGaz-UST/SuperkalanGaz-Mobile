@@ -2,34 +2,35 @@ import { type Ref } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useAuth } from '@/contexts/AuthContext';
 import { colors } from '@/theme/colors';
 import { fonts } from '@/theme/fonts';
 
 /**
  * The shared blue greeting header used by every signed-in surface (Home, Orders,
  * Profile, Rewards). Safe-area aware — never hardcodes the status-bar offset.
- *
- * SCAFFOLD: `name` is the customer's first name from the session profile; the
- * placeholder "Juan" comes from the Figma mock until the CIM endpoint lands.
  */
 export function AppHeader({
-  name = 'Juan',
   onHelp,
   onMenu,
   helpRef,
 }: {
-  name?: string;
   onHelp?: () => void;
   onMenu?: () => void;
   /** Ref on the help (?) icon, so the app guide can spotlight it. */
   helpRef?: Ref<View>;
 }) {
   const insets = useSafeAreaInsets();
+  const { session } = useAuth();
+  const firstName = session?.user.user_metadata?.first_name;
+  const greetingName =
+    typeof firstName === 'string' && firstName.trim() ? firstName.trim() : 'Customer';
+
   return (
     <View style={[styles.header, { paddingTop: insets.top + 20 }]}>
       <View>
         <Text style={styles.hello}>
-          Hello, <Text style={styles.helloName}>{name}</Text>!
+          Hello, <Text style={styles.helloName}>{greetingName}</Text>!
         </Text>
         <Text style={styles.sub}>What can we do for you today?</Text>
       </View>
