@@ -34,11 +34,18 @@ export interface SignupDraft {
 }
 
 // ── Main app ─────────────────────────────────────────────────────────────────
-export type MainScreen = 'home' | 'orders' | 'profile' | 'order-process' | 'faqs';
-export type MainTab = 'home' | 'rewards' | 'orders' | 'profile';
+export type MainScreen = 'home' | 'orders' | 'more' | 'profile' | 'order-process' | 'faqs';
+export type MainTab = 'home' | 'rewards' | 'orders' | 'more';
+export type ProfileSection = 'personal' | 'preferences';
+
+export interface MainNavigateOptions {
+  tab?: MainTab;
+  showGuide?: boolean;
+  profileSection?: ProfileSection;
+}
 
 /** Bottom-nav config shared by every signed-in surface. */
 export interface MainNavProps {
   active: MainTab;
-  onNavigate: (screen: MainScreen, opts?: { tab?: MainTab; showGuide?: boolean }) => void;
+  onNavigate: (screen: MainScreen, opts?: MainNavigateOptions) => void;
 }

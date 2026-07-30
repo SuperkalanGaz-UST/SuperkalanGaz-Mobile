@@ -1,16 +1,13 @@
 import { useState } from 'react';
 import { Image, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Feather, Ionicons } from '@expo/vector-icons';
-import { useAuth } from '@/contexts/AuthContext';
 import { colors } from '@/theme/colors';
 import { fonts } from '@/theme/fonts';
 import { cardShadow, radii } from '@/theme/metrics';
 import { cylinderFor, images } from '@/lib/assets';
 import { AppHeader } from '@/components/ui/AppHeader';
 import { BottomNav } from '@/components/ui/BottomNav';
-import { SideMenu } from '@/components/ui/SideMenu';
-import { LogoutConfirmModal } from '@/components/ui/overlays';
-import type { MainScreen, MainTab } from '@/navigation/types';
+import type { MainNavigateOptions, MainScreen } from '@/navigation/types';
 
 /**
  * Orders (Figma "MyOrders"): active/past tabs, order details, and the two-step
@@ -36,14 +33,11 @@ function Stars({ value, onRate }: { value: number; onRate: (n: number) => void }
   );
 }
 
-export function OrdersScreen({ onNavigate }: { onNavigate: (screen: MainScreen, opts?: { tab?: MainTab }) => void }) {
-  const { signOut } = useAuth();
+export function OrdersScreen({ onNavigate }: { onNavigate: (screen: MainScreen, opts?: MainNavigateOptions) => void }) {
   const [tab, setTab] = useState<'active' | 'past'>('active');
   const [sub, setSub] = useState<Sub>('list');
   const [rating, setRating] = useState(0);
   const [comment, setComment] = useState('');
-  const [menuOpen, setMenuOpen] = useState(false);
-  const [logoutConfirm, setLogoutConfirm] = useState(false);
 
   const showFeedback = sub === 'feedback-rate' || sub === 'feedback-comment';
 
@@ -161,7 +155,7 @@ export function OrdersScreen({ onNavigate }: { onNavigate: (screen: MainScreen, 
 
   return (
     <View style={styles.flex}>
-      <AppHeader onMenu={() => setMenuOpen(true)} />
+      <AppHeader onProfile={() => onNavigate('profile', { profileSection: 'personal' })} />
 
       <ScrollView style={styles.sheet} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 130 }}>
         {sub === 'list' && renderList()}
@@ -224,16 +218,6 @@ export function OrdersScreen({ onNavigate }: { onNavigate: (screen: MainScreen, 
       </Modal>
 
       <BottomNav active="orders" onNavigate={onNavigate} />
-      <SideMenu
-        visible={menuOpen}
-        onClose={() => setMenuOpen(false)}
-        onProfile={() => onNavigate('profile', { tab: 'profile' })}
-        onOrders={() => setSub('list')}
-        onFaqs={() => onNavigate('faqs')}
-        onGuide={() => onNavigate('home', { tab: 'home' })}
-        onLogout={() => setLogoutConfirm(true)}
-      />
-      <LogoutConfirmModal visible={logoutConfirm} onConfirm={() => { setLogoutConfirm(false); signOut(); }} onCancel={() => setLogoutConfirm(false)} />
     </View>
   );
 }

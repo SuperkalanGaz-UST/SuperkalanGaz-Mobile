@@ -12,18 +12,16 @@ import {
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useAuth } from '@/contexts/AuthContext';
 import { colors } from '@/theme/colors';
 import { fonts } from '@/theme/fonts';
 import { cardShadow, radii } from '@/theme/metrics';
 import { cylinderFor, images } from '@/lib/assets';
 import { AppHeader } from '@/components/ui/AppHeader';
 import { BottomNav } from '@/components/ui/BottomNav';
-import { SideMenu } from '@/components/ui/SideMenu';
 import { AppGuideOverlay, GUIDE_STEP_COUNT, type GuideRect } from '@/components/ui/AppGuide';
-import { LogoutConfirmModal, PromoModal } from '@/components/ui/overlays';
+import { PromoModal } from '@/components/ui/overlays';
 import { RewardsScreen } from '@/screens/home/RewardsScreen';
-import type { MainScreen, MainTab } from '@/navigation/types';
+import type { MainNavigateOptions, MainScreen, MainTab } from '@/navigation/types';
 
 /**
  * Customer Home (Figma "Homepage"): points card, active order, reorder rail and
@@ -60,16 +58,13 @@ export function HomeScreen({
 }: {
   initialTab?: MainTab;
   showGuide?: boolean;
-  onNavigate: (screen: MainScreen, opts?: { tab?: MainTab }) => void;
+  onNavigate: (screen: MainScreen, opts?: MainNavigateOptions) => void;
 }) {
-  const { signOut } = useAuth();
   const insets = useSafeAreaInsets();
   const { width: winW, height: winH } = useWindowDimensions();
 
   const [activeTab, setActiveTab] = useState<MainTab>(initialTab);
   const [rewardsSub, setRewardsSub] = useState<'my' | 'all'>('my');
-  const [menuOpen, setMenuOpen] = useState(false);
-  const [logoutConfirm, setLogoutConfirm] = useState(false);
   const [guideOpen, setGuideOpen] = useState(showGuide);
   const [guideStep, setGuideStep] = useState(0);
   const [guideRect, setGuideRect] = useState<GuideRect | null>(null);
@@ -157,7 +152,11 @@ export function HomeScreen({
 
   return (
     <View style={styles.flex}>
-      <AppHeader helpRef={helpRef} onHelp={openGuide} onMenu={() => setMenuOpen(true)} />
+      <AppHeader
+        helpRef={helpRef}
+        onHelp={openGuide}
+        onProfile={() => onNavigate('profile', { profileSection: 'personal' })}
+      />
 
       {activeTab === 'rewards' ? (
         <RewardsScreen initialSub={rewardsSub} onExit={() => setActiveTab('home')} />
@@ -248,25 +247,6 @@ export function HomeScreen({
           if (screen === 'home') setActiveTab(opts?.tab ?? 'home');
           else onNavigate(screen, opts);
         }}
-      />
-
-      <SideMenu
-        visible={menuOpen}
-        onClose={() => setMenuOpen(false)}
-        onProfile={() => onNavigate('profile', { tab: 'profile' })}
-        onOrders={() => onNavigate('orders', { tab: 'orders' })}
-        onFaqs={() => onNavigate('faqs')}
-        onGuide={openGuide}
-        onLogout={() => setLogoutConfirm(true)}
-      />
-
-      <LogoutConfirmModal
-        visible={logoutConfirm}
-        onConfirm={() => {
-          setLogoutConfirm(false);
-          signOut();
-        }}
-        onCancel={() => setLogoutConfirm(false)}
       />
 
       <PromoModal visible={promoOpen && !guideOpen && activeTab === 'home'} onClose={() => setPromoOpen(false)} />

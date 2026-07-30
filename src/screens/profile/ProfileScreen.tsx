@@ -1,15 +1,12 @@
 import { useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import { Feather } from '@expo/vector-icons';
-import { useAuth } from '@/contexts/AuthContext';
 import { colors } from '@/theme/colors';
 import { fonts } from '@/theme/fonts';
 import { radii } from '@/theme/metrics';
 import { AppHeader } from '@/components/ui/AppHeader';
 import { BottomNav } from '@/components/ui/BottomNav';
-import { SideMenu } from '@/components/ui/SideMenu';
-import { LogoutConfirmModal } from '@/components/ui/overlays';
-import type { MainScreen, MainTab } from '@/navigation/types';
+import type { MainNavigateOptions, MainScreen, ProfileSection } from '@/navigation/types';
 
 /**
  * Profile (Figma "MyProfile"): personal details (view/edit), reset-password sheet,
@@ -17,13 +14,16 @@ import type { MainScreen, MainTab } from '@/navigation/types';
  *
  * SCAFFOLD: profile fields are Figma mock — load/persist via the CIM endpoint.
  */
-export function ProfileScreen({ onNavigate }: { onNavigate: (screen: MainScreen, opts?: { tab?: MainTab }) => void }) {
-  const { signOut } = useAuth();
-  const [tab, setTab] = useState<'personal' | 'preferences'>('personal');
+export function ProfileScreen({
+  initialSection = 'personal',
+  onNavigate,
+}: {
+  initialSection?: ProfileSection;
+  onNavigate: (screen: MainScreen, opts?: MainNavigateOptions) => void;
+}) {
+  const [tab, setTab] = useState<ProfileSection>(initialSection);
   const [editMode, setEditMode] = useState(false);
   const [resetOpen, setResetOpen] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
-  const [logoutConfirm, setLogoutConfirm] = useState(false);
 
   const [firstName, setFirstName] = useState('Juan');
   const [lastName, setLastName] = useState('Dela Cruz');
@@ -50,7 +50,7 @@ export function ProfileScreen({ onNavigate }: { onNavigate: (screen: MainScreen,
 
   return (
     <View style={styles.flex}>
-      <AppHeader onMenu={() => setMenuOpen(true)} />
+      <AppHeader />
 
       <ScrollView style={styles.sheet} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 130 }}>
         {/* Avatar banner */}
@@ -132,6 +132,7 @@ export function ProfileScreen({ onNavigate }: { onNavigate: (screen: MainScreen,
             ))}
           </View>
         )}
+
       </ScrollView>
 
       {/* Reset password sheet */}
@@ -169,17 +170,7 @@ export function ProfileScreen({ onNavigate }: { onNavigate: (screen: MainScreen,
         </View>
       </Modal>
 
-      <BottomNav active="profile" onNavigate={onNavigate} />
-      <SideMenu
-        visible={menuOpen}
-        onClose={() => setMenuOpen(false)}
-        onProfile={() => setTab('personal')}
-        onOrders={() => onNavigate('orders', { tab: 'orders' })}
-        onFaqs={() => onNavigate('faqs')}
-        onGuide={() => onNavigate('home', { tab: 'home' })}
-        onLogout={() => setLogoutConfirm(true)}
-      />
-      <LogoutConfirmModal visible={logoutConfirm} onConfirm={() => { setLogoutConfirm(false); signOut(); }} onCancel={() => setLogoutConfirm(false)} />
+      <BottomNav active="more" onNavigate={onNavigate} />
     </View>
   );
 }

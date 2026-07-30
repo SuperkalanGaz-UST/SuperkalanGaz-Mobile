@@ -13,7 +13,7 @@ const TABS: { key: MainTab; label: string; icon: FeatherName; screen: MainScreen
   { key: 'home', label: 'Home', icon: 'home', screen: 'home' },
   { key: 'rewards', label: 'Rewards', icon: 'gift', screen: 'home' },
   { key: 'orders', label: 'Orders', icon: 'clipboard', screen: 'orders' },
-  { key: 'profile', label: 'Profile', icon: 'user', screen: 'profile' },
+  { key: 'more', label: 'More', icon: 'more-horizontal', screen: 'more' },
 ];
 
 /**

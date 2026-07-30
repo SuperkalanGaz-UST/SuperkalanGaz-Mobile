@@ -10,18 +10,20 @@ import { Toast } from '@/components/ui/overlays';
 import type { MainScreen, MainTab } from '@/navigation/types';
 
 /**
- * Order flow (Figma "OrderProcess"): product select → review → track. Includes
- * address / schedule / payment sheets, the confirm dialog, and post-delivery
- * feedback. Maps to the SRD module; `order_source = Mobile App` is implied.
+ * Order flow (Figma "OrderProcess"): product select → delivery timing → review
+ * → track. Includes address / schedule / payment sheets, the confirm dialog,
+ * and post-delivery feedback. Maps to the SRD module; `order_source = Mobile App`
+ * is implied.
  *
  * SCAFFOLD: catalog, pricing, ETA and tracking are Figma mock. Wire to the SRD
  * endpoints; the four-timestamp SLA chain + status milestones live server-side
  * (AGENTS.md §8). Never show live rider GPS — status milestones only.
  */
-type Step = 'select' | 'summary' | 'track';
+type Step = 'select' | 'schedule' | 'summary' | 'track';
 type ModalKind = 'none' | 'selectAddress' | 'editAddress' | 'confirmed' | 'sched' | 'payment';
 type Payment = 'gcash' | 'maya' | 'cash';
 type FeedbackStep = 'none' | 'rider' | 'store' | 'xfeedback';
+type DeliverySchedule = 'now' | 'later';
 
 const PRODUCTS = [
   { id: '2.7kg', label: '2.7 KG', price: 350, eta: '12:00 - 12:05 PM', desc: 'Our most portable variant and ideal for outdoor use. The most affordable, easy to use product for those shifting to clean-burning LPG.' },
@@ -36,6 +38,49 @@ const ADDRESSES = [
   { id: 'house2', label: 'House 2', address: '810 Main Alley, Las Pinas' },
 ];
 const STEP_LABELS = ['Order Confirmed', 'Preparing', 'Out for Delivery', 'Delivered'];
+const CALENDAR_WEEKDAYS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+const CALENDAR_MONTHS = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
+];
+const DELIVERY_TIME_OPTIONS = ['9:00 AM', '10:00 AM', '11:00 AM', '1:00 PM', '2:00 PM', '3:00 PM'];
+
+function startOfDay(date: Date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function getMinimumScheduleDate() {
+  const tomorrow = startOfDay(new Date());
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  return tomorrow;
+}
+
+function startOfMonth(date: Date) {
+  return new Date(date.getFullYear(), date.getMonth(), 1);
+}
+
+function isSameDay(left: Date, right: Date) {
+  return left.getFullYear() === right.getFullYear()
+    && left.getMonth() === right.getMonth()
+    && left.getDate() === right.getDate();
+}
+
+function buildCalendarDays(month: Date) {
+  const firstDay = new Date(month.getFullYear(), month.getMonth(), 1).getDay();
+  const daysInMonth = new Date(month.getFullYear(), month.getMonth() + 1, 0).getDate();
+  const cells: Array<Date | null> = Array.from({ length: firstDay }, () => null);
+
+  for (let day = 1; day <= daysInMonth; day += 1) {
+    cells.push(new Date(month.getFullYear(), month.getMonth(), day));
+  }
+
+  while (cells.length % 7 !== 0) cells.push(null);
+  return cells;
+}
+
+function formatScheduleDate(date: Date) {
+  return `${CALENDAR_MONTHS[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()}`;
+}
 
 export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainScreen, opts?: { tab?: MainTab }) => void }) {
   const insets = useSafeAreaInsets();
@@ -52,6 +97,12 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
   const [storeRating, setStoreRating] = useState(0);
   const [feedbackText, setFeedbackText] = useState('');
   const [toast, setToast] = useState('');
+  const [deliverySchedule, setDeliverySchedule] = useState<DeliverySchedule | null>(null);
+  const [scheduledDate, setScheduledDate] = useState<Date | null>(null);
+  const [scheduledTime, setScheduledTime] = useState('');
+  const [draftScheduleDate, setDraftScheduleDate] = useState<Date | null>(null);
+  const [draftScheduleTime, setDraftScheduleTime] = useState(DELIVERY_TIME_OPTIONS[1]);
+  const [visibleScheduleMonth, setVisibleScheduleMonth] = useState(() => startOfMonth(getMinimumScheduleDate()));
 
   // edit-address form
   const [eaLabel, setEaLabel] = useState('');
@@ -61,6 +112,40 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
   const total = product.price * qty;
   const showToast = (m: string) => { setToast(m); setTimeout(() => setToast(''), 2500); };
   const headerTitle = step === 'track' ? 'Track my Order' : 'Request an Order';
+  const scheduledLabel = scheduledDate && scheduledTime
+    ? `${formatScheduleDate(scheduledDate)} • ${scheduledTime}`
+    : '';
+  const minimumScheduleDate = getMinimumScheduleDate();
+  const minimumScheduleMonth = startOfMonth(minimumScheduleDate);
+  const calendarDays = buildCalendarDays(visibleScheduleMonth);
+  const canViewPreviousMonth = visibleScheduleMonth.getTime() > minimumScheduleMonth.getTime();
+  const canContinueFromSchedule = deliverySchedule === 'now'
+    || (deliverySchedule === 'later' && Boolean(scheduledLabel));
+
+  const openScheduleModal = () => {
+    const initialDate = scheduledDate ? startOfDay(scheduledDate) : null;
+    setDeliverySchedule('later');
+    setDraftScheduleDate(initialDate);
+    setDraftScheduleTime(scheduledTime || DELIVERY_TIME_OPTIONS[1]);
+    setVisibleScheduleMonth(startOfMonth(initialDate ?? minimumScheduleDate));
+    setModal('sched');
+  };
+
+  const changeScheduleMonth = (offset: number) => {
+    setVisibleScheduleMonth((current) => {
+      const next = new Date(current.getFullYear(), current.getMonth() + offset, 1);
+      return next.getTime() < minimumScheduleMonth.getTime() ? current : next;
+    });
+  };
+
+  const confirmSchedule = () => {
+    if (!draftScheduleDate) return;
+    setDeliverySchedule('later');
+    setScheduledDate(draftScheduleDate);
+    setScheduledTime(draftScheduleTime);
+    setModal('none');
+    showToast(`Scheduled for ${formatScheduleDate(draftScheduleDate)} at ${draftScheduleTime}`);
+  };
 
   /* ── Stepper ── */
   const stepper = (done: number) => (
@@ -99,8 +184,8 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
   /* ── Steps ── */
   const renderSelect = () => (
     <View style={styles.selectWrap}>
-      <Text style={styles.stepCounter}>STEP 1 OF 2</Text>
-      <View style={styles.progressTrack}><View style={[styles.progressFill, { width: '52%' }]} /></View>
+      <Text style={styles.stepCounter}>STEP 1 OF 3</Text>
+      <View style={styles.progressTrack}><View style={[styles.progressFill, { width: '34%' }]} /></View>
       <Text style={styles.selectHint}>Please Select One</Text>
       {PRODUCTS.map((p) => {
         const sel = product.id === p.id;
@@ -131,7 +216,7 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
       <View style={styles.costRow}><Text style={styles.costLabel}>ESTIMATED COST:</Text><Text style={styles.costValue}>₱{total.toLocaleString()}</Text></View>
       <View style={styles.costRow}><Text style={styles.costLabelSm}>ESTIMATED DELIVERY TIME:</Text><Text style={styles.costValueSm}>{product.eta}</Text></View>
       <View style={styles.hair} />
-      <Pressable style={styles.cta} onPress={() => setStep('summary')}><Text style={styles.ctaText}>REVIEW ORDER</Text></Pressable>
+      <Pressable style={styles.cta} onPress={() => setStep('schedule')}><Text style={styles.ctaText}>CONTINUE</Text></Pressable>
     </View>
   );
 
@@ -142,9 +227,83 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
     </View>
   );
 
+  const renderSchedule = () => (
+    <View style={styles.scheduleStepWrap}>
+      <Text style={styles.stepCounter}>STEP 2 OF 3</Text>
+      <View style={styles.progressTrack}><View style={[styles.progressFill, { width: '67%' }]} /></View>
+
+      <Text style={styles.scheduleStepTitle}>When should we deliver?</Text>
+      <Text style={styles.scheduleStepSubtitle}>Choose a delivery option before reviewing your order.</Text>
+
+      <Pressable
+        accessibilityRole="radio"
+        accessibilityState={{ checked: deliverySchedule === 'now' }}
+        onPress={() => setDeliverySchedule('now')}
+        style={[styles.deliveryChoice, deliverySchedule === 'now' ? styles.deliveryChoiceSelected : null]}
+      >
+        <View style={styles.deliveryChoiceTop}>
+          <View style={[styles.deliveryChoiceIcon, deliverySchedule === 'now' ? styles.deliveryChoiceIconSelected : null]}>
+            <Feather name="zap" size={22} color={deliverySchedule === 'now' ? '#fff' : colors.primary} />
+          </View>
+          <View style={styles.deliveryChoiceCopy}>
+            <Text style={styles.deliveryChoiceTitle}>Deliver now</Text>
+            <Text style={styles.deliveryChoiceDescription}>Same-day delivery from your selected branch.</Text>
+          </View>
+          <Ionicons
+            name={deliverySchedule === 'now' ? 'radio-button-on' : 'radio-button-off'}
+            size={21}
+            color={deliverySchedule === 'now' ? colors.primary : colors.muted}
+          />
+        </View>
+        <View style={styles.deliveryChoiceMeta}>
+          <Feather name="clock" size={15} color={colors.primary} />
+          <Text style={styles.deliveryChoiceMetaText}>Estimated arrival: {product.eta}</Text>
+        </View>
+      </Pressable>
+
+      <Pressable
+        accessibilityRole="radio"
+        accessibilityState={{ checked: deliverySchedule === 'later' }}
+        onPress={openScheduleModal}
+        style={[styles.deliveryChoice, deliverySchedule === 'later' ? styles.deliveryChoiceSelected : null]}
+      >
+        <View style={styles.deliveryChoiceTop}>
+          <View style={[styles.deliveryChoiceIcon, deliverySchedule === 'later' ? styles.deliveryChoiceIconSelected : null]}>
+            <Feather name="calendar" size={21} color={deliverySchedule === 'later' ? '#fff' : colors.primary} />
+          </View>
+          <View style={styles.deliveryChoiceCopy}>
+            <Text style={styles.deliveryChoiceTitle}>Schedule for later</Text>
+            <Text style={styles.deliveryChoiceDescription}>Choose a future delivery date and time.</Text>
+          </View>
+          <Ionicons
+            name={deliverySchedule === 'later' ? 'radio-button-on' : 'radio-button-off'}
+            size={21}
+            color={deliverySchedule === 'later' ? colors.primary : colors.muted}
+          />
+        </View>
+        <View style={styles.deliveryChoiceMeta}>
+          <Feather name={scheduledLabel ? 'check-circle' : 'calendar'} size={15} color={scheduledLabel ? colors.greenBright : colors.primary} />
+          <Text style={[styles.deliveryChoiceMetaText, scheduledLabel ? styles.deliveryChoiceScheduledText : null]}>
+            {scheduledLabel || 'Tap to select date and time'}
+          </Text>
+        </View>
+      </Pressable>
+
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ disabled: !canContinueFromSchedule }}
+        disabled={!canContinueFromSchedule}
+        style={[styles.cta, styles.scheduleStepCta, !canContinueFromSchedule ? styles.ctaDisabled : null]}
+        onPress={() => setStep('summary')}
+      >
+        <Text style={styles.ctaText}>REVIEW ORDER</Text>
+      </Pressable>
+    </View>
+  );
+
   const renderSummary = () => (
     <View style={styles.summaryWrap}>
-      <Text style={styles.stepCounter}>STEP 2 OF 2</Text>
+      <Text style={styles.stepCounter}>STEP 3 OF 3</Text>
       <View style={styles.progressTrack}><View style={[styles.progressFill, { width: '100%' }]} /></View>
 
       <Text style={styles.sumSection}>Order Summary</Text>
@@ -173,20 +332,30 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
       </View>
       <View style={styles.hair} />
 
-      <Text style={styles.sumSection}>Delivery Time</Text>
-      {summaryRow('Estimated Delivery Time:', product.eta)}
+      <View style={styles.sumSectionRow}>
+        <Text style={[styles.sumSection, styles.sumSectionInRow]}>Delivery Time</Text>
+        <Pressable accessibilityRole="button" onPress={() => setStep('schedule')}>
+          <Text style={styles.miniLink}>Edit</Text>
+        </Pressable>
+      </View>
+      {deliverySchedule === 'later'
+        ? (
+          <>
+            {summaryRow('Delivery option:', 'Schedule for later')}
+            {summaryRow('Scheduled delivery:', scheduledLabel)}
+          </>
+        )
+        : (
+          <>
+            {summaryRow('Delivery option:', 'Deliver now')}
+            {summaryRow('Estimated delivery time:', product.eta)}
+          </>
+        )}
       <View style={styles.hair} />
 
       <Text style={styles.sumSection}>Cost & Loyalty Rewards</Text>
       {summaryRow('Estimated Cost:', `₱ ${total.toLocaleString()}`)}
       {summaryRow('Loyalty Points:', '+50 pts', colors.greenBright)}
-      <View style={styles.hair} />
-
-      <Text style={styles.sumSection}>Schedule for Later</Text>
-      <Pressable style={styles.schedInput} onPress={() => setModal('sched')}>
-        <Text style={styles.schedPlaceholder}>Select date and time</Text>
-        <Feather name="calendar" size={20} color={colors.muted} />
-      </Pressable>
       <View style={styles.hair} />
 
       <Pressable style={styles.cta} onPress={() => setModal('confirmed')}><Text style={styles.ctaText}>PLACE ORDER</Text></Pressable>
@@ -246,7 +415,12 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
     <View style={styles.flex}>
       <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
         <Pressable
-          onPress={() => (step === 'select' ? onNavigate('home', { tab: 'home' }) : step === 'summary' ? setStep('select') : setStep('summary'))}
+          onPress={() => {
+            if (step === 'select') onNavigate('home', { tab: 'home' });
+            else if (step === 'schedule') setStep('select');
+            else if (step === 'summary') setStep('schedule');
+            else setStep('summary');
+          }}
           hitSlop={8}
         >
           <Feather name="chevron-left" size={24} color={colors.heading} />
@@ -257,6 +431,7 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
 
       <ScrollView style={styles.flex} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 32 }}>
         {step === 'select' && renderSelect()}
+        {step === 'schedule' && renderSchedule()}
         {step === 'summary' && renderSummary()}
         {step === 'track' && renderTrack()}
       </ScrollView>
@@ -341,28 +516,105 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
         </View>
       </Modal>
 
-      {/* Schedule (simplified) */}
+      {/* Schedule */}
       <Modal visible={modal === 'sched'} transparent animationType="fade" onRequestClose={() => setModal('none')}>
         <View style={styles.centerBackdrop}>
-          <View style={styles.dialog}>
+          <View style={[styles.dialog, styles.scheduleDialog]}>
             <View style={styles.dialogHead}>
               <Text style={styles.dialogTitle}>Schedule for Later</Text>
               <Pressable onPress={() => setModal('none')} hitSlop={8}><Feather name="x" size={20} color={colors.gray} /></Pressable>
             </View>
             <Text style={styles.metaText}>When do you want your order to be delivered?</Text>
             <View style={styles.calendarBox}>
-              <Text style={styles.calMonth}>March 2024</Text>
+              <View style={styles.calHeader}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Previous month"
+                  accessibilityState={{ disabled: !canViewPreviousMonth }}
+                  disabled={!canViewPreviousMonth}
+                  hitSlop={6}
+                  onPress={() => changeScheduleMonth(-1)}
+                  style={[styles.calNavButton, !canViewPreviousMonth ? styles.calNavButtonDisabled : null]}
+                >
+                  <Feather name="chevron-left" size={18} color={canViewPreviousMonth ? colors.heading : colors.muted} />
+                </Pressable>
+                <Text style={styles.calMonth}>
+                  {CALENDAR_MONTHS[visibleScheduleMonth.getMonth()]} {visibleScheduleMonth.getFullYear()}
+                </Text>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Next month"
+                  hitSlop={6}
+                  onPress={() => changeScheduleMonth(1)}
+                  style={styles.calNavButton}
+                >
+                  <Feather name="chevron-right" size={18} color={colors.heading} />
+                </Pressable>
+              </View>
               <View style={styles.calGrid}>
-                {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((d, i) => (
+                {CALENDAR_WEEKDAYS.map((d, i) => (
                   <Text key={i} style={styles.calDayHead}>{d}</Text>
                 ))}
-                {Array.from({ length: 31 }).map((_, i) => (
-                  <View key={i} style={styles.calCell}><Text style={styles.calDay}>{i + 1}</Text></View>
-                ))}
+                {calendarDays.map((date, index) => {
+                  if (!date) return <View key={`empty-${index}`} style={styles.calCell} />;
+
+                  const disabled = date.getTime() < minimumScheduleDate.getTime();
+                  const selected = draftScheduleDate ? isSameDay(date, draftScheduleDate) : false;
+                  return (
+                    <Pressable
+                      key={date.toISOString()}
+                      accessibilityRole="button"
+                      accessibilityLabel={formatScheduleDate(date)}
+                      accessibilityState={{ disabled, selected }}
+                      disabled={disabled}
+                      onPress={() => setDraftScheduleDate(date)}
+                      style={styles.calCell}
+                    >
+                      <View style={[styles.calDayCircle, selected ? styles.calDayCircleSelected : null]}>
+                        <Text
+                          style={[
+                            styles.calDay,
+                            disabled ? styles.calDayDisabled : null,
+                            selected ? styles.calDaySelected : null,
+                          ]}
+                        >
+                          {date.getDate()}
+                        </Text>
+                      </View>
+                    </Pressable>
+                  );
+                })}
               </View>
             </View>
-            <Pressable style={[styles.cta, { marginTop: 12 }]} onPress={() => { setModal('none'); showToast('Scheduled for later'); }}>
-              <Text style={styles.ctaText}>CONFIRM</Text>
+
+            <Text style={styles.scheduleTimeLabel}>Delivery time</Text>
+            <View style={styles.scheduleTimeGrid}>
+              {DELIVERY_TIME_OPTIONS.map((time) => {
+                const selected = draftScheduleTime === time;
+                return (
+                  <Pressable
+                    key={time}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected }}
+                    onPress={() => setDraftScheduleTime(time)}
+                    style={[styles.scheduleTimeOption, selected ? styles.scheduleTimeOptionSelected : null]}
+                  >
+                    <Text style={[styles.scheduleTimeText, selected ? styles.scheduleTimeTextSelected : null]}>
+                      {time}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            <Pressable
+              accessibilityRole="button"
+              accessibilityState={{ disabled: !draftScheduleDate }}
+              disabled={!draftScheduleDate}
+              style={[styles.cta, styles.scheduleConfirm, !draftScheduleDate ? styles.ctaDisabled : null]}
+              onPress={confirmSchedule}
+            >
+              <Text style={styles.ctaText}>{draftScheduleDate ? 'CONFIRM SCHEDULE' : 'SELECT A DATE'}</Text>
             </Pressable>
           </View>
         </View>
@@ -377,6 +629,9 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
             <Text style={styles.confirmTitle}>Order Confirmed!</Text>
             <Text style={styles.confirmBody}>
               Order# 12345 is confirmed at 11:30 AM{'\n'}Branch: Superkalan Gaz - Metro Manila{'\n'}Contact Number: 09171234567
+              {deliverySchedule === 'later' && scheduledLabel
+                ? `\nScheduled Delivery: ${scheduledLabel}`
+                : `\nEstimated Delivery: ${product.eta}`}
             </Text>
             <Pressable style={[styles.cta, { width: '80%' }]} onPress={() => { setModal('none'); setStep('track'); }}>
               <Text style={styles.ctaText}>SEE ORDER RECEIPT</Text>
@@ -466,8 +721,26 @@ const styles = StyleSheet.create({
   cta: { backgroundColor: colors.primary, borderRadius: radii.button, height: 40, alignItems: 'center', justifyContent: 'center' },
   ctaText: { fontFamily: fonts.bold, fontSize: 12, color: '#fff' },
 
+  scheduleStepWrap: { paddingHorizontal: 16, paddingTop: 8 },
+  scheduleStepTitle: { fontFamily: fonts.semibold, fontSize: 20, color: colors.heading, marginTop: 24, marginBottom: 4 },
+  scheduleStepSubtitle: { fontFamily: fonts.regular, fontSize: 12, lineHeight: 18, color: colors.grayText, marginBottom: 20 },
+  deliveryChoice: { borderWidth: 1, borderColor: colors.cardBorder, borderRadius: radii.card, padding: 16, marginBottom: 12, backgroundColor: '#fff' },
+  deliveryChoiceSelected: { borderWidth: 2, borderColor: colors.primary, backgroundColor: 'rgba(0,123,193,0.04)' },
+  deliveryChoiceTop: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
+  deliveryChoiceIcon: { width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,123,193,0.1)' },
+  deliveryChoiceIconSelected: { backgroundColor: colors.primary },
+  deliveryChoiceCopy: { flex: 1 },
+  deliveryChoiceTitle: { fontFamily: fonts.semibold, fontSize: 16, color: colors.heading, marginBottom: 2 },
+  deliveryChoiceDescription: { fontFamily: fonts.regular, fontSize: 11, lineHeight: 16, color: colors.grayText },
+  deliveryChoiceMeta: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 14, paddingTop: 12, borderTopWidth: 1, borderTopColor: colors.cardBorder },
+  deliveryChoiceMetaText: { flex: 1, fontFamily: fonts.medium, fontSize: 11, color: colors.primary },
+  deliveryChoiceScheduledText: { color: colors.greenBright },
+  scheduleStepCta: { marginTop: 12 },
+
   summaryWrap: { paddingHorizontal: 16, paddingTop: 8 },
   sumSection: { fontFamily: fonts.semibold, fontSize: 16, color: colors.label, marginBottom: 12, marginTop: 4 },
+  sumSectionRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  sumSectionInRow: { marginBottom: 12 },
   sumProduct: { flexDirection: 'row', alignItems: 'center', gap: 16, marginBottom: 12 },
   sumRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 },
   sumLabel: { fontFamily: fonts.semibold, fontSize: 13, color: colors.heading },
@@ -475,9 +748,6 @@ const styles = StyleSheet.create({
   miniLink: { fontFamily: fonts.medium, fontSize: 12, color: colors.primary, textDecorationLine: 'underline' },
   payRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
   payLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  schedInput: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', height: 32, borderRadius: radii.chip, borderWidth: 1, borderColor: colors.cardBorder, paddingHorizontal: 12 },
-  schedPlaceholder: { fontFamily: fonts.regular, fontSize: 12, color: colors.muted },
-
   orderPillWrap: { alignItems: 'center', paddingTop: 8, marginBottom: 12 },
   orderPill: { backgroundColor: 'rgba(0,123,193,0.2)', borderRadius: radii.card, paddingHorizontal: 12, paddingVertical: 4 },
   orderPillText: { fontFamily: fonts.medium, fontSize: 14, color: colors.primary },
@@ -514,12 +784,28 @@ const styles = StyleSheet.create({
   eaLabel: { fontFamily: fonts.medium, fontSize: 10, color: colors.primary, marginBottom: 4 },
   eaInput: { height: 30, borderWidth: 1, borderColor: colors.cardBorder, borderRadius: radii.chip, paddingHorizontal: 8, fontFamily: fonts.regular, fontSize: 12, color: colors.grayText },
 
-  calendarBox: { backgroundColor: colors.redeemPale, borderRadius: 8, padding: 12, marginBottom: 4 },
-  calMonth: { fontFamily: fonts.semibold, fontSize: 13, color: colors.heading, textAlign: 'center', marginBottom: 8 },
+  scheduleDialog: { maxWidth: 380 },
+  calendarBox: { backgroundColor: colors.redeemPale, borderRadius: 8, padding: 12, marginBottom: 12 },
+  calHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
+  calNavButton: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
+  calNavButtonDisabled: { opacity: 0.45 },
+  calMonth: { fontFamily: fonts.semibold, fontSize: 13, color: colors.heading, textAlign: 'center' },
   calGrid: { flexDirection: 'row', flexWrap: 'wrap' },
   calDayHead: { width: `${100 / 7}%`, textAlign: 'center', fontFamily: fonts.semibold, fontSize: 10, color: colors.muted, marginBottom: 4 },
-  calCell: { width: `${100 / 7}%`, alignItems: 'center', paddingVertical: 4 },
+  calCell: { width: `${100 / 7}%`, height: 34, alignItems: 'center', justifyContent: 'center' },
+  calDayCircle: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
+  calDayCircleSelected: { backgroundColor: colors.primary },
   calDay: { fontFamily: fonts.regular, fontSize: 12, color: colors.heading },
+  calDayDisabled: { color: colors.muted, opacity: 0.55 },
+  calDaySelected: { color: '#fff', fontFamily: fonts.semibold },
+  scheduleTimeLabel: { fontFamily: fonts.semibold, fontSize: 12, color: colors.heading, marginBottom: 8 },
+  scheduleTimeGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  scheduleTimeOption: { width: '31%', height: 34, borderWidth: 1, borderColor: colors.cardBorder, borderRadius: radii.chip, alignItems: 'center', justifyContent: 'center' },
+  scheduleTimeOptionSelected: { borderColor: colors.primary, backgroundColor: 'rgba(0,123,193,0.08)' },
+  scheduleTimeText: { fontFamily: fonts.regular, fontSize: 11, color: colors.grayText },
+  scheduleTimeTextSelected: { color: colors.primary, fontFamily: fonts.semibold },
+  scheduleConfirm: { marginTop: 16 },
+  ctaDisabled: { backgroundColor: colors.muted, opacity: 0.7 },
 
   sheetBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.3)' },
   bottomSheet: { backgroundColor: '#fff', borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingHorizontal: 20, paddingTop: 20, paddingBottom: 32 },
