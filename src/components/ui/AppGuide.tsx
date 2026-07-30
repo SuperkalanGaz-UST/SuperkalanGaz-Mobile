@@ -44,11 +44,11 @@ type Step = { img: number; title: string; body: string; anchor: Anchor };
 
 const STEPS: Step[] = [
   { img: images.mascotWave, title: 'Hi! Welcome to Superkalan Gaz App', body: "I'm here to guide you in this app, let me show you some cool things here that will help you.", anchor: 'bottom' },
-  { img: images.mascotRewards, title: 'Rewards & Points', body: 'You can view your accumulated points and claim awesome rewards from our Rewards Shop!', anchor: 'bottom' },
+  { img: images.mascotRewards, title: 'Loyalty Rewards', body: 'Track your current loyalty progress and open the rewards available for your account type.', anchor: 'bottom' },
   { img: images.mascotRewards, title: 'Active Orders', body: 'Here you can see your active orders as of the moment. You can view it anytime.', anchor: 'bottom' },
   { img: images.mascotOrder, title: 'Ordering Again?', body: "Ordering again made easier! Just one click away and you're all set for another order.", anchor: 'bottom' },
   { img: images.mascotQuick, title: 'Quick Order', body: 'Quick orders can be viewed also here! You can choose from a wide variety of high-quality gas tanks.', anchor: 'bottom' },
-  { img: images.mascotOrder, title: 'Navigate with Ease!', body: 'Our navigation bar gives everything you need from Rewards, checking your active and past orders and viewing your profile.', anchor: 'top' },
+  { img: images.mascotOrder, title: 'Navigate with Ease!', body: 'Use the bar for Home, Rewards, Orders, and More. Your profile is always available from the avatar above.', anchor: 'top' },
   { img: images.mascotWave, title: 'Need Help?', body: "Just click 'Guide' to see this app guide again if ever you feel lost.", anchor: 'top' },
 ];
 

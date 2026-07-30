@@ -14,11 +14,13 @@ export function AppHeader({
   onHelp,
   onProfile,
   helpRef,
+  variant = 'default',
 }: {
   onHelp?: () => void;
   onProfile?: () => void;
   /** Ref on the help (?) icon, so the app guide can spotlight it. */
   helpRef?: Ref<View>;
+  variant?: 'default' | 'home';
 }) {
   const insets = useSafeAreaInsets();
   const { session } = useAuth();
@@ -37,12 +39,24 @@ export function AppHeader({
     : null;
 
   return (
-    <View style={[styles.header, { paddingTop: insets.top + 20 }]}>
+    <View
+      style={[
+        styles.header,
+        variant === 'home' && styles.homeHeader,
+        { paddingTop: insets.top + (variant === 'home' ? 10 : 20) },
+      ]}
+    >
       <View>
-        <Text style={styles.hello}>
-          Hello, <Text style={styles.helloName}>{greetingName}</Text>!
+        <Text style={[styles.hello, variant === 'home' && styles.homeHello]}>
+          Hello,{' '}
+          <Text style={[styles.helloName, variant === 'home' && styles.homeHelloName]}>
+            {greetingName}
+          </Text>
+          !
         </Text>
-        <Text style={styles.sub}>What can we do for you today?</Text>
+        <Text style={[styles.sub, variant === 'home' && styles.homeSub]}>
+          What can we do for you today?
+        </Text>
       </View>
       <View style={styles.actions}>
         <Pressable ref={helpRef} onPress={onHelp} hitSlop={8}>
@@ -54,7 +68,7 @@ export function AppHeader({
           disabled={!onProfile}
           onPress={onProfile}
           hitSlop={8}
-          style={styles.profileButton}
+          style={[styles.profileButton, variant === 'home' && styles.homeProfileButton]}
         >
           {avatarUrl
             ? <Image source={{ uri: avatarUrl }} style={styles.profileImage} />
@@ -74,9 +88,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
   },
+  homeHeader: { paddingBottom: 8 },
   hello: { fontFamily: fonts.bold, fontSize: 24, color: '#fff' },
+  homeHello: { fontSize: 24 },
   helloName: { color: colors.helloAccent },
+  homeHelloName: { color: '#fff' },
   sub: { fontFamily: fonts.medium, fontSize: 12, color: '#fff', marginTop: 2 },
+  homeSub: { fontSize: 12, marginTop: 3 },
   actions: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   profileButton: {
     width: 36,
@@ -91,4 +109,5 @@ const styles = StyleSheet.create({
   },
   profileImage: { width: '100%', height: '100%' },
   profileInitials: { fontFamily: fonts.bold, fontSize: 12, color: '#fff' },
+  homeProfileButton: { width: 38, height: 38, borderRadius: 19 },
 });

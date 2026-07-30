@@ -40,7 +40,7 @@ export function BottomNav({
         style={styles.tab}
         onPress={() => onNavigate(t.screen, { tab: t.key })}
       >
-        <Feather name={t.icon} size={22} color={color} />
+        <Feather name={t.icon} size={20} color={color} />
         <Text style={[styles.tabLabel, { color, fontFamily: on ? fonts.bold : fonts.regular }]}>
           {t.label}
         </Text>
@@ -49,7 +49,7 @@ export function BottomNav({
   };
 
   return (
-    <View style={[styles.wrap, { bottom: insets.bottom + 10 }]} pointerEvents="box-none">
+    <View style={[styles.wrap, { bottom: insets.bottom + 6 }]} pointerEvents="box-none">
       <View style={styles.bar}>
         {left.map(renderTab)}
         <View style={styles.fabSlot} />
@@ -66,7 +66,7 @@ const styles = StyleSheet.create({
   wrap: { position: 'absolute', left: 12, right: 12, alignItems: 'center' },
   bar: {
     width: '100%',
-    height: 68,
+    height: 64,
     backgroundColor: colors.navBarFill,
     borderRadius: 28,
     flexDirection: 'row',
@@ -76,15 +76,15 @@ const styles = StyleSheet.create({
     ...navShadow,
   },
   tab: { alignItems: 'center', gap: 3, width: 64 },
-  tabLabel: { fontSize: 12 },
-  fabSlot: { width: 64 },
+  tabLabel: { fontSize: 10 },
+  fabSlot: { width: 58 },
   fab: {
     position: 'absolute',
     alignSelf: 'center',
-    top: -22,
-    width: 55,
-    height: 55,
-    borderRadius: 28,
+    top: -21,
+    width: 54,
+    height: 54,
+    borderRadius: 27,
     backgroundColor: colors.primary,
     borderWidth: 4,
     borderColor: '#fff',
