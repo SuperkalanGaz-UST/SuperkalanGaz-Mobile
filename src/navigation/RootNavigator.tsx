@@ -1,5 +1,6 @@
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import { useAuth } from '@/contexts/AuthContext';
+import { PricingProvider } from '@/contexts/PricingContext';
 import { AuthFlow } from '@/navigation/AuthFlow';
 import { MainApp } from '@/navigation/MainApp';
 import { colors } from '@/theme/colors';
@@ -21,7 +22,11 @@ export function RootNavigator() {
     );
   }
 
-  return session ? <MainApp /> : <AuthFlow />;
+  return session ? (
+    <PricingProvider>
+      <MainApp />
+    </PricingProvider>
+  ) : <AuthFlow />;
 }
 
 const styles = StyleSheet.create({

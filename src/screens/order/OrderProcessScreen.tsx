@@ -1,12 +1,14 @@
-import { useState } from 'react';
-import { Image, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useMemo, useState } from 'react';
+import { ActivityIndicator, Image, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors } from '@/theme/colors';
 import { fonts } from '@/theme/fonts';
 import { cardShadow, radii } from '@/theme/metrics';
 import { cylinderFor, images } from '@/lib/assets';
+import { PrimaryButton } from '@/components/ui/controls';
 import { Toast } from '@/components/ui/overlays';
+import { CylinderSize, formatPeso, usePricing } from '@/contexts/PricingContext';
 import type { MainScreen, MainTab } from '@/navigation/types';
 
 /**
@@ -15,9 +17,8 @@ import type { MainScreen, MainTab } from '@/navigation/types';
  * and post-delivery feedback. Maps to the SRD module; `order_source = Mobile App`
  * is implied.
  *
- * SCAFFOLD: catalog, pricing, ETA and tracking are Figma mock. Wire to the SRD
- * endpoints; the four-timestamp SLA chain + status milestones live server-side
- * (AGENTS.md §8). Never show live rider GPS — status milestones only.
+ * Pricing comes from the shared SRD catalog. ETA and tracking remain Figma mock
+ * data until their SRD endpoints are wired. Never show live rider GPS.
  */
 type Step = 'select' | 'schedule' | 'summary' | 'track';
 type ModalKind = 'none' | 'selectAddress' | 'editAddress' | 'confirmed' | 'sched' | 'payment';
@@ -25,12 +26,12 @@ type Payment = 'gcash' | 'maya' | 'cash';
 type FeedbackStep = 'none' | 'rider' | 'store' | 'xfeedback';
 type DeliverySchedule = 'now' | 'later';
 
-const PRODUCTS = [
-  { id: '2.7kg', label: '2.7 KG', price: 350, eta: '12:00 - 12:05 PM', desc: 'Our most portable variant and ideal for outdoor use. The most affordable, easy to use product for those shifting to clean-burning LPG.' },
-  { id: '5kg', label: '5 KG', price: 620, eta: '12:00 - 12:10 PM', desc: 'Lighter weight, lower priced alternative to our 11kg variant for smaller families.' },
-  { id: '11kg', label: '11 KG', price: 1000, eta: '12:00 - 12:05 PM', desc: 'The standard size for the average Filipino home.' },
-  { id: '22kg', label: '22 KG', price: 1800, eta: '12:15 - 12:30 PM', desc: 'Typically used in bakeries and small-medium restaurants/food outlets.' },
-  { id: '50kg', label: '50 KG', price: 3500, eta: '12:30 - 1:00 PM', desc: 'Ideal for large restaurants, laundry business, hotels, factories and other commercial establishments.' },
+const PRODUCT_DETAILS: Array<{ id: CylinderSize; label: string; eta: string; use: string }> = [
+  { id: '2.7kg', label: '2.7 KG', eta: '12:00 - 12:05 PM', use: 'Portable • Outdoor use' },
+  { id: '5kg', label: '5 KG', eta: '12:00 - 12:10 PM', use: 'Compact • Small households' },
+  { id: '11kg', label: '11 KG', eta: '12:00 - 12:05 PM', use: 'Standard • Everyday home use' },
+  { id: '22kg', label: '22 KG', eta: '12:15 - 12:30 PM', use: 'Commercial • Food businesses' },
+  { id: '50kg', label: '50 KG', eta: '12:30 - 1:00 PM', use: 'Heavy-duty • Large establishments' },
 ];
 const ADDRESSES = [
   { id: 'house1', label: 'House 1', address: '123 Main St, Metro Manila' },
@@ -84,10 +85,17 @@ function formatScheduleDate(date: Date) {
 
 export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainScreen, opts?: { tab?: MainTab }) => void }) {
   const insets = useSafeAreaInsets();
+  const { prices, loading: pricesLoading, error: pricesError, refresh: refreshPrices } = usePricing();
+  const products = useMemo(
+    () => PRODUCT_DETAILS.flatMap((product) => {
+      const price = prices[product.id];
+      return price === undefined ? [] : [{ ...product, price }];
+    }),
+    [prices],
+  );
   const [step, setStep] = useState<Step>('select');
   const [modal, setModal] = useState<ModalKind>('none');
-  const [product, setProduct] = useState(PRODUCTS[2]);
-  const [qty, setQty] = useState(1);
+  const [quantities, setQuantities] = useState<Record<string, number>>({});
   const [address, setAddress] = useState(ADDRESSES[0]);
   const [payment, setPayment] = useState<Payment>('gcash');
   const [tempPayment, setTempPayment] = useState<Payment>('gcash');
@@ -109,7 +117,20 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
   const [eaAddress, setEaAddress] = useState('');
   const [eaContact, setEaContact] = useState('');
 
-  const total = product.price * qty;
+  const selectedProducts = products
+    .map((selectedProduct) => ({
+      product: selectedProduct,
+      quantity: quantities[selectedProduct.id] ?? 0,
+    }))
+    .filter(({ quantity }) => quantity > 0);
+  const total = selectedProducts.reduce(
+    (sum, item) => sum + item.product.price * item.quantity,
+    0,
+  );
+  const totalQty = selectedProducts.reduce((sum, item) => sum + item.quantity, 0);
+  const typeCount = selectedProducts.length;
+  const estimatedEta = selectedProducts[selectedProducts.length - 1]?.product.eta;
+  const estimatedEtaLabel = estimatedEta ?? '—';
   const showToast = (m: string) => { setToast(m); setTimeout(() => setToast(''), 2500); };
   const headerTitle = step === 'track' ? 'Track my Order' : 'Request an Order';
   const scheduledLabel = scheduledDate && scheduledTime
@@ -121,6 +142,13 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
   const canViewPreviousMonth = visibleScheduleMonth.getTime() > minimumScheduleMonth.getTime();
   const canContinueFromSchedule = deliverySchedule === 'now'
     || (deliverySchedule === 'later' && Boolean(scheduledLabel));
+
+  const changeProductQuantity = (productId: string, amount: number) => {
+    setQuantities((current) => ({
+      ...current,
+      [productId]: Math.max(0, (current[productId] ?? 0) + amount),
+    }));
+  };
 
   const openScheduleModal = () => {
     const initialDate = scheduledDate ? startOfDay(scheduledDate) : null;
@@ -183,40 +211,130 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
 
   /* ── Steps ── */
   const renderSelect = () => (
-    <View style={styles.selectWrap}>
-      <Text style={styles.stepCounter}>STEP 1 OF 3</Text>
-      <View style={styles.progressTrack}><View style={[styles.progressFill, { width: '34%' }]} /></View>
-      <Text style={styles.selectHint}>Please Select One</Text>
-      {PRODUCTS.map((p) => {
-        const sel = product.id === p.id;
-        return (
-          <Pressable
-            key={p.id}
-            onPress={() => setProduct(p)}
-            style={[styles.productRow, { backgroundColor: sel ? '#bee1f7' : '#fff', borderColor: sel ? colors.label : colors.primary }]}
-          >
-            <View style={styles.productRowLeft}>
-              <Text style={styles.productRowSize}>{p.label}</Text>
-              <Image source={cylinderFor(p.label)} style={{ width: 48, height: 60 }} resizeMode="contain" />
-            </View>
-            <Text style={styles.productRowDesc}>{p.desc}</Text>
-          </Pressable>
-        );
-      })}
-      <View style={styles.hair} />
-      <View style={styles.qtyRow}>
-        <Text style={styles.qtyLabel}>QUANTITY</Text>
-        <View style={styles.qtyStepper}>
-          <Pressable style={styles.qtyBtn} onPress={() => setQty(Math.max(1, qty - 1))}><Text style={styles.qtyBtnText}>−</Text></Pressable>
-          <Text style={styles.qtyValue}>{qty}</Text>
-          <Pressable style={styles.qtyBtn} onPress={() => setQty(qty + 1)}><Text style={styles.qtyBtnText}>+</Text></Pressable>
+    <View style={styles.selectScreen}>
+      <ScrollView
+        style={styles.selectScroll}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.selectContent}
+      >
+        <Text style={styles.stepCounter}>STEP 1 OF 3</Text>
+        <View style={styles.progressTrack}><View style={[styles.progressFill, { width: '34%' }]} /></View>
+        <Text style={styles.selectTitle}>Build your order</Text>
+        <Text style={styles.selectSubtitle}>Add one or more cylinder sizes.</Text>
+
+        <View style={styles.productList}>
+          {pricesLoading && <ActivityIndicator color={colors.primary} style={styles.catalogLoading} />}
+          {!pricesLoading && pricesError && (
+            <Pressable accessibilityRole="button" onPress={() => void refreshPrices()} style={styles.catalogError}>
+              <Text style={styles.catalogErrorText}>{pricesError}</Text>
+              <Text style={styles.catalogRetry}>Tap to try again</Text>
+            </Pressable>
+          )}
+          {products.map((product) => {
+            const quantity = quantities[product.id] ?? 0;
+            const selected = quantity > 0;
+            const rowContent = (
+              <>
+                <View style={styles.productArtWrap}>
+                  <Image
+                    source={cylinderFor(product.label)}
+                    style={styles.productArt}
+                    resizeMode="contain"
+                  />
+                </View>
+                <View style={styles.productCopy}>
+                  <Text style={styles.productRowSize}>{product.label}</Text>
+                  <Text style={styles.productRowDesc}>{product.use}</Text>
+                  <Text style={styles.productRowPrice}>{formatPeso(product.price)}</Text>
+                </View>
+
+                {selected ? (
+                  <View style={styles.productStepper}>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={`Remove one ${product.label} cylinder`}
+                      hitSlop={4}
+                      onPress={() => changeProductQuantity(product.id, -1)}
+                      style={({ pressed }) => [
+                        styles.productQtyButton,
+                        pressed ? styles.controlPressed : null,
+                      ]}
+                    >
+                      <Feather name="minus" size={18} color={colors.heading} />
+                    </Pressable>
+                    <Text style={styles.productQtyValue}>{quantity}</Text>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={`Add one ${product.label} cylinder`}
+                      hitSlop={4}
+                      onPress={() => changeProductQuantity(product.id, 1)}
+                      style={({ pressed }) => [
+                        styles.productQtyButton,
+                        pressed ? styles.controlPressed : null,
+                      ]}
+                    >
+                      <Feather name="plus" size={18} color={colors.heading} />
+                    </Pressable>
+                  </View>
+                ) : (
+                  <View style={styles.addProductButton} pointerEvents="none">
+                    <Feather name="plus" size={20} color={colors.primary} />
+                    <Text style={styles.addProductText}>Add</Text>
+                  </View>
+                )}
+              </>
+            );
+
+            if (selected) {
+              return (
+                <View
+                  key={product.id}
+                  style={[styles.productRow, styles.productRowSelected]}
+                >
+                  {rowContent}
+                </View>
+              );
+            }
+
+            return (
+              <Pressable
+                key={product.id}
+                accessibilityRole="button"
+                accessibilityLabel={`Select ${product.label} cylinder`}
+                accessibilityHint="Adds one cylinder to your order"
+                onPress={() => changeProductQuantity(product.id, 1)}
+                style={({ pressed }) => [
+                  styles.productRow,
+                  pressed ? styles.controlPressed : null,
+                ]}
+              >
+                {rowContent}
+              </Pressable>
+            );
+          })}
         </View>
+      </ScrollView>
+
+      <View style={[styles.selectSummary, { paddingBottom: Math.max(insets.bottom, 16) }]}>
+        <View style={styles.selectSummaryCount}>
+          <Text style={styles.selectSummaryTotal}>
+            {totalQty} {totalQty === 1 ? 'cylinder' : 'cylinders'}
+          </Text>
+          <Text style={styles.selectSummaryTypes}>
+            {typeCount} {typeCount === 1 ? 'type' : 'types'}
+          </Text>
+        </View>
+        <View style={styles.selectSummaryDivider} />
+        <View style={styles.selectSummaryCost}>
+          <Text style={styles.selectSummaryLabel}>Estimated cost</Text>
+          <Text style={styles.selectSummaryValue}>₱{total.toLocaleString()}</Text>
+        </View>
+        <PrimaryButton
+          label="Review order"
+          disabled={totalQty === 0 || pricesLoading || Boolean(pricesError)}
+          onPress={() => setStep('schedule')}
+        />
       </View>
-      <View style={styles.hair} />
-      <View style={styles.costRow}><Text style={styles.costLabel}>ESTIMATED COST:</Text><Text style={styles.costValue}>₱{total.toLocaleString()}</Text></View>
-      <View style={styles.costRow}><Text style={styles.costLabelSm}>ESTIMATED DELIVERY TIME:</Text><Text style={styles.costValueSm}>{product.eta}</Text></View>
-      <View style={styles.hair} />
-      <Pressable style={styles.cta} onPress={() => setStep('schedule')}><Text style={styles.ctaText}>CONTINUE</Text></Pressable>
     </View>
   );
 
@@ -257,7 +375,7 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
         </View>
         <View style={styles.deliveryChoiceMeta}>
           <Feather name="clock" size={15} color={colors.primary} />
-          <Text style={styles.deliveryChoiceMetaText}>Estimated arrival: {product.eta}</Text>
+          <Text style={styles.deliveryChoiceMetaText}>Estimated arrival: {estimatedEtaLabel}</Text>
         </View>
       </Pressable>
 
@@ -307,12 +425,22 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
       <View style={styles.progressTrack}><View style={[styles.progressFill, { width: '100%' }]} /></View>
 
       <Text style={styles.sumSection}>Order Summary</Text>
-      <View style={styles.sumProduct}>
-        <Image source={cylinderFor(product.label)} style={{ width: 54, height: 81 }} resizeMode="contain" />
-        <View>
-          <Text style={styles.sumValue}>Selected Type: {product.label} - LPG</Text>
-          <Text style={styles.sumValue}>Quantity: {qty}</Text>
-        </View>
+      <View style={styles.sumProducts}>
+        {selectedProducts.map(({ product: selectedProduct, quantity }) => (
+          <View key={selectedProduct.id} style={styles.sumProduct}>
+            <Image
+              source={cylinderFor(selectedProduct.label)}
+              style={styles.sumProductImage}
+              resizeMode="contain"
+            />
+            <View style={styles.sumProductCopy}>
+              <Text style={styles.sumProductName}>{selectedProduct.label} LPG</Text>
+              <Text style={styles.sumProductMeta}>
+                Quantity: {quantity} • ₱{(selectedProduct.price * quantity).toLocaleString()}
+              </Text>
+            </View>
+          </View>
+        ))}
       </View>
       <View style={styles.hair} />
 
@@ -348,7 +476,7 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
         : (
           <>
             {summaryRow('Delivery option:', 'Deliver now')}
-            {summaryRow('Estimated delivery time:', product.eta)}
+            {summaryRow('Estimated delivery time:', estimatedEtaLabel)}
           </>
         )}
       <View style={styles.hair} />
@@ -380,7 +508,7 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
         <View style={styles.orderPillWrap}>
           <View style={styles.orderPill}><Text style={styles.orderPillText}>ORDER# 12345</Text></View>
         </View>
-        <Text style={styles.etaBig}>{product.eta}</Text>
+        <Text style={styles.etaBig}>{estimatedEtaLabel}</Text>
         <Text style={styles.trackStatus}>Superkalan Gaz - Metro Manila Branch is preparing your order.</Text>
         <View style={{ marginBottom: 12 }}>{stepper(2)}</View>
         <Text style={styles.trackNotify}>We'll notify you if your order is out for delivery.</Text>
@@ -429,12 +557,15 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
         <View style={{ width: 24 }} />
       </View>
 
-      <ScrollView style={styles.flex} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 32 }}>
-        {step === 'select' && renderSelect()}
-        {step === 'schedule' && renderSchedule()}
-        {step === 'summary' && renderSummary()}
-        {step === 'track' && renderTrack()}
-      </ScrollView>
+      {step === 'select' ? (
+        renderSelect()
+      ) : (
+        <ScrollView style={styles.flex} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 32 }}>
+          {step === 'schedule' && renderSchedule()}
+          {step === 'summary' && renderSummary()}
+          {step === 'track' && renderTrack()}
+        </ScrollView>
+      )}
 
       <Toast message={toast} />
 
@@ -631,7 +762,7 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
               Order# 12345 is confirmed at 11:30 AM{'\n'}Branch: Superkalan Gaz - Metro Manila{'\n'}Contact Number: 09171234567
               {deliverySchedule === 'later' && scheduledLabel
                 ? `\nScheduled Delivery: ${scheduledLabel}`
-                : `\nEstimated Delivery: ${product.eta}`}
+                : `\nEstimated Delivery: ${estimatedEtaLabel}`}
             </Text>
             <Pressable style={[styles.cta, { width: '80%' }]} onPress={() => { setModal('none'); setStep('track'); }}>
               <Text style={styles.ctaText}>SEE ORDER RECEIPT</Text>
@@ -697,27 +828,59 @@ const styles = StyleSheet.create({
   headerTitle: { flex: 1, textAlign: 'center', fontFamily: fonts.bold, fontSize: 24, color: colors.heading },
 
   stepCounter: { fontFamily: fonts.semibold, fontSize: 9, color: colors.gray, marginBottom: 4 },
-  progressTrack: { height: 11, borderRadius: radii.card, backgroundColor: colors.cardBorder, overflow: 'hidden' },
+  progressTrack: { height: 4, borderRadius: radii.card, backgroundColor: colors.cardBorder, overflow: 'hidden' },
   progressFill: { height: '100%', borderRadius: radii.card, backgroundColor: colors.primary },
 
-  selectWrap: { paddingHorizontal: 16, paddingTop: 8, gap: 8 },
-  selectHint: { fontFamily: fonts.medium, fontSize: 13, color: colors.heading },
-  productRow: { flexDirection: 'row', alignItems: 'center', borderRadius: radii.card, borderWidth: 2, overflow: 'hidden', minHeight: 74, ...cardShadow },
-  productRowLeft: { width: 104, paddingLeft: 10, paddingVertical: 6, alignSelf: 'stretch', justifyContent: 'space-between' },
-  productRowSize: { fontFamily: fonts.semibold, fontSize: 13, color: colors.heading },
-  productRowDesc: { flex: 1, paddingRight: 8, fontFamily: fonts.light, fontSize: 8, color: colors.heading, textAlign: 'center', lineHeight: 12 },
+  selectScreen: { flex: 1, backgroundColor: colors.surface },
+  selectScroll: { flex: 1 },
+  selectContent: { paddingHorizontal: 16, paddingTop: 8, paddingBottom: 8 },
+  selectTitle: { fontFamily: fonts.bold, fontSize: 24, lineHeight: 32, color: colors.heading, marginTop: 24 },
+  selectSubtitle: { fontFamily: fonts.regular, fontSize: 14, lineHeight: 21, color: colors.grayText, marginTop: 2 },
+  productList: { marginTop: 18 },
+  productRow: {
+    minHeight: 104,
+    marginHorizontal: -16,
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  productRowSelected: { backgroundColor: colors.primaryTint },
+  productArtWrap: { width: 96, height: 96, alignItems: 'center', justifyContent: 'center' },
+  productArt: { width: 76, height: 88 },
+  productCopy: { flex: 1, paddingRight: 8 },
+  productRowSize: { fontFamily: fonts.semibold, fontSize: 20, color: colors.heading },
+  productRowDesc: { marginTop: 2, fontFamily: fonts.regular, fontSize: 12, lineHeight: 18, color: colors.grayText },
+  productRowPrice: { marginTop: 3, fontFamily: fonts.semibold, fontSize: 13, color: colors.primary },
+  catalogLoading: { paddingVertical: 28 },
+  catalogError: { alignItems: 'center', borderRadius: radii.card, backgroundColor: '#FEF2F2', padding: 20 },
+  catalogErrorText: { textAlign: 'center', fontFamily: fonts.medium, fontSize: 13, color: '#B42318' },
+  catalogRetry: { marginTop: 6, fontFamily: fonts.semibold, fontSize: 13, color: colors.primary },
+  addProductButton: { minWidth: 66, minHeight: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 6 },
+  addProductText: { fontFamily: fonts.medium, fontSize: 14, color: colors.primary },
+  productStepper: { width: 136, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  productQtyButton: { width: 44, height: 44, borderRadius: radii.card, backgroundColor: colors.surfaceMuted, alignItems: 'center', justifyContent: 'center' },
+  productQtyValue: { minWidth: 32, textAlign: 'center', fontFamily: fonts.semibold, fontSize: 16, color: colors.heading },
+  controlPressed: { opacity: 0.7 },
+  selectSummary: {
+    paddingHorizontal: 20,
+    paddingTop: 16,
+    gap: 12,
+    backgroundColor: colors.surface,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    borderTopLeftRadius: radii.sheet,
+    borderTopRightRadius: radii.sheet,
+  },
+  selectSummaryCount: { flexDirection: 'row', alignItems: 'baseline', gap: 16 },
+  selectSummaryTotal: { fontFamily: fonts.semibold, fontSize: 20, color: colors.heading },
+  selectSummaryTypes: { fontFamily: fonts.regular, fontSize: 13, color: colors.grayText },
+  selectSummaryDivider: { height: 1, backgroundColor: colors.border },
+  selectSummaryCost: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  selectSummaryLabel: { fontFamily: fonts.regular, fontSize: 14, color: colors.heading },
+  selectSummaryValue: { fontFamily: fonts.semibold, fontSize: 20, color: colors.heading },
   hair: { height: 1, backgroundColor: colors.cardBorder, marginVertical: 8 },
-  qtyRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  qtyLabel: { fontFamily: fonts.semibold, fontSize: 15, color: colors.heading },
-  qtyStepper: { flexDirection: 'row', alignItems: 'center', borderRadius: radii.card, backgroundColor: colors.primary, height: 29, width: 95 },
-  qtyBtn: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  qtyBtnText: { color: '#fff', fontFamily: fonts.semibold, fontSize: 18 },
-  qtyValue: { flex: 1, textAlign: 'center', color: '#fff', fontFamily: fonts.semibold, fontSize: 16 },
-  costRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 },
-  costLabel: { fontFamily: fonts.semibold, fontSize: 15, color: colors.heading },
-  costValue: { fontFamily: fonts.medium, fontSize: 15, color: colors.heading },
-  costLabelSm: { fontFamily: fonts.semibold, fontSize: 13, color: colors.heading },
-  costValueSm: { fontFamily: fonts.medium, fontSize: 12, color: colors.heading },
   cta: { backgroundColor: colors.primary, borderRadius: radii.button, height: 40, alignItems: 'center', justifyContent: 'center' },
   ctaText: { fontFamily: fonts.bold, fontSize: 12, color: '#fff' },
 
@@ -741,7 +904,12 @@ const styles = StyleSheet.create({
   sumSection: { fontFamily: fonts.semibold, fontSize: 16, color: colors.label, marginBottom: 12, marginTop: 4 },
   sumSectionRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   sumSectionInRow: { marginBottom: 12 },
-  sumProduct: { flexDirection: 'row', alignItems: 'center', gap: 16, marginBottom: 12 },
+  sumProducts: { marginBottom: 4 },
+  sumProduct: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 12 },
+  sumProductImage: { width: 48, height: 64 },
+  sumProductCopy: { flex: 1 },
+  sumProductName: { fontFamily: fonts.semibold, fontSize: 13, color: colors.heading },
+  sumProductMeta: { marginTop: 2, fontFamily: fonts.regular, fontSize: 11, color: colors.grayText },
   sumRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 },
   sumLabel: { fontFamily: fonts.semibold, fontSize: 13, color: colors.heading },
   sumValue: { fontFamily: fonts.medium, fontSize: 13, color: colors.heading, flexShrink: 1, textAlign: 'right' },

@@ -20,7 +20,6 @@
       "apiUrl": "http://localhost:3001"
     },
     "plugins": [
-      "expo-status-bar",
       "expo-font"
     ]
   }

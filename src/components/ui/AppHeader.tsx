@@ -88,7 +88,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
   },
-  homeHeader: { paddingBottom: 8 },
+  homeHeader: { paddingBottom: 40 },
   hello: { fontFamily: fonts.bold, fontSize: 24, color: '#fff' },
   homeHello: { fontSize: 24 },
   helloName: { color: colors.helloAccent },

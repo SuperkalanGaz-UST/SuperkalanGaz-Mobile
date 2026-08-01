@@ -12,13 +12,13 @@ type FeatherName = keyof typeof Feather.glyphMap;
 const TABS: { key: MainTab; label: string; icon: FeatherName; screen: MainScreen }[] = [
   { key: 'home', label: 'Home', icon: 'home', screen: 'home' },
   { key: 'rewards', label: 'Rewards', icon: 'gift', screen: 'home' },
-  { key: 'orders', label: 'Orders', icon: 'clipboard', screen: 'orders' },
+  { key: 'orders', label: 'History', icon: 'clipboard', screen: 'orders' },
   { key: 'more', label: 'More', icon: 'more-horizontal', screen: 'more' },
 ];
 
 /**
- * Floating bottom tab bar with a central order FAB (DESIGN.md §7). Four tabs tint
- * `primary` when active, `navInactive` otherwise. The FAB opens the order flow.
+ * Floating bottom tab bar with a raised Order action (DESIGN.md §7). The four
+ * destination tabs tint `primary` when active and `navInactive` otherwise.
  */
 export function BottomNav({
   active,
@@ -55,8 +55,16 @@ export function BottomNav({
         <View style={styles.fabSlot} />
         {right.map(renderTab)}
       </View>
-      <Pressable style={styles.fab} onPress={() => onNavigate('order-process')}>
-        <Image source={images.orderBag} style={styles.fabIcon} resizeMode="contain" />
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Order"
+        style={styles.fabAction}
+        onPress={() => onNavigate('order-process')}
+      >
+        <View style={styles.fabCircle}>
+          <Image source={images.orderBag} style={styles.fabIcon} resizeMode="contain" />
+        </View>
+        <Text style={styles.fabLabel}>Order</Text>
       </Pressable>
     </View>
   );
@@ -78,10 +86,14 @@ const styles = StyleSheet.create({
   tab: { alignItems: 'center', gap: 3, width: 64 },
   tabLabel: { fontSize: 10 },
   fabSlot: { width: 58 },
-  fab: {
+  fabAction: {
     position: 'absolute',
     alignSelf: 'center',
     top: -21,
+    width: 58,
+    alignItems: 'center',
+  },
+  fabCircle: {
     width: 54,
     height: 54,
     borderRadius: 27,
@@ -91,6 +103,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     ...navShadow,
+  },
+  fabLabel: {
+    marginTop: 3,
+    fontFamily: fonts.bold,
+    fontSize: 10,
+    color: colors.primary,
   },
   fabIcon: { width: 24, height: 34 },
 });

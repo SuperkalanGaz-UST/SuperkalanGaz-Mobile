@@ -178,8 +178,9 @@ Shared primitives now live in `src/components/ui/`. Reuse them; don't re-style e
   - `EmailPhoneToggle` / `AccountTypeTabs` — segmented controls with a sliding thumb/underline.
   - `OtpInput` — six auto-advancing 1-char boxes.
 - **Header + shell** — `AppHeader` (blue greeting bar, safe-area aware, help + menu actions)
-  over a white sheet (`marginTop: -24`, radius `24`); `BottomNav` (floating bar, 4 tabs +
-  center order FAB); `SideMenu` (right slide-out drawer).
+  over a white sheet (`marginTop: -24`, radius `24`); `BottomNav` (floating bar with
+  Home / Rewards / History / More destinations plus a raised center cylinder action labeled
+  **Order**); `SideMenu` (right slide-out drawer).
 - **Cards** — white, radius `10`, `cardShadow`. Points card = `LinearGradient`
   (`pointsTop`→`pointsBottom`) in `HomeScreen`. Active-order card: 1px `activeCardBorder` +
   tinted `activeFooter` strip. Reorder card: 172×101, 1px `primary`. Quick-order card: 2px

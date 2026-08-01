@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { Session } from '@supabase/supabase-js';
+import { normalizePhMobile } from '@/lib/phMobile';
 import { supabase } from '@/lib/supabase';
 
 /**
@@ -35,6 +36,14 @@ export interface SignUpInput {
   accountType: AccountType;
 }
 
+export interface ProfileUpdateInput {
+  firstName: string;
+  lastName: string;
+  address: string;
+  /** Empty removes the optional contact number; otherwise it is stored as E.164. */
+  contactNumber: string;
+}
+
 /** AsyncStorage key for the persisted account type (survives app restarts). */
 const ACCOUNT_TYPE_KEY = 'superkalan.accountType';
 
@@ -67,6 +76,9 @@ interface AuthContextValue {
     method: SignUpInput['method'],
     identifier: string,
   ) => Promise<{ error: string | null }>;
+  /** Reload the signed-in customer's latest Auth profile metadata. */
+  refreshProfile: () => Promise<{ error: string | null }>;
+  updateProfile: (input: ProfileUpdateInput) => Promise<{ error: string | null }>;
   signOut: () => Promise<void>;
 }
 
@@ -162,6 +174,47 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 type: 'sms',
                 phone: identifier,
               });
+        return { error: error?.message ?? null };
+      },
+      refreshProfile: async () => {
+        if (!session?.user) return { error: 'No signed-in customer found' };
+
+        const { data, error } = await supabase.auth.getUser();
+        if (error) return { error: error.message };
+
+        // getUser validates against Auth and returns current metadata. Preserve
+        // the existing tokens while replacing only the customer user payload.
+        setSession((current) => current ? { ...current, user: data.user } : current);
+        return { error: null };
+      },
+      updateProfile: async (input) => {
+        if (!session?.user) return { error: 'No signed-in customer found' };
+
+        const firstName = input.firstName.trim();
+        const lastName = input.lastName.trim();
+        const address = input.address.trim();
+        if (!firstName || !lastName || !address) {
+          return { error: 'First name, last name, and address are required' };
+        }
+
+        const rawContact = input.contactNumber.trim();
+        const contactNumber = rawContact ? normalizePhMobile(rawContact) : null;
+        if (rawContact && !contactNumber) {
+          return { error: 'Enter a valid PH mobile number' };
+        }
+
+        // Customer-facing profile fields may live in user metadata until the
+        // customer CIM endpoint lands. Authorization claims remain exclusively
+        // in app_metadata and are never written by this client.
+        const { error } = await supabase.auth.updateUser({
+          data: {
+            ...session.user.user_metadata,
+            first_name: firstName,
+            last_name: lastName,
+            address,
+            contact_number: contactNumber,
+          },
+        });
         return { error: error?.message ?? null };
       },
       signOut: async () => {

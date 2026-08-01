@@ -13,12 +13,15 @@ import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
 import { useAuth } from '@/contexts/AuthContext';
+import { formatPeso, usePricing } from '@/contexts/PricingContext';
 import { colors } from '@/theme/colors';
 import { fonts } from '@/theme/fonts';
 import { cylinderFor } from '@/lib/assets';
 import { AppHeader } from '@/components/ui/AppHeader';
 import { BottomNav } from '@/components/ui/BottomNav';
+import { AppRefreshControl } from '@/components/ui/AppRefreshControl';
 import { AppGuideOverlay, GUIDE_STEP_COUNT, type GuideRect } from '@/components/ui/AppGuide';
+import { usePullToRefresh } from '@/hooks/usePullToRefresh';
 import { RewardsScreen } from '@/screens/home/RewardsScreen';
 import type { MainNavigateOptions, MainScreen, MainTab } from '@/navigation/types';
 
@@ -30,11 +33,6 @@ import type { MainNavigateOptions, MainScreen, MainTab } from '@/navigation/type
  * SCAFFOLD: greeting name, points, and orders are Figma mock data — wire to the
  * session profile + SRD/LPM endpoints (AGENTS.md) when available.
  */
-const ORDER_AGAIN = [
-  { size: '11 KG', price: '₱1,450' },
-  { size: '2.7 KG', price: '₱550' },
-];
-
 // App-guide step → the Home element it spotlights (null = full dim). Kept in sync
 // with the copy in `AppGuide.tsx` STEPS by index.
 const GUIDE_TARGETS = [null, 'rewards', 'active', 'reorder', 'quick', 'nav', 'help'] as const;
@@ -54,6 +52,18 @@ export function HomeScreen({
   const insets = useSafeAreaInsets();
   const { width: winW, height: winH } = useWindowDimensions();
   const { accountType, session } = useAuth();
+  const { prices, loading: pricesLoading, error: pricesError, refresh: refreshPrices } = usePricing();
+  const { refreshing, onRefresh } = usePullToRefresh(refreshPrices);
+  const priceLabel = (cylinderSize: '11kg' | '2.7kg') => {
+    const price = prices[cylinderSize];
+    if (price !== undefined) return formatPeso(price);
+    if (pricesLoading) return 'Loading price…';
+    return 'Tap to retry';
+  };
+  const orderAgain = [
+    { size: '11 KG', price: priceLabel('11kg') },
+    { size: '2.7 KG', price: priceLabel('2.7kg') },
+  ];
 
   const [activeTab, setActiveTab] = useState<MainTab>(initialTab);
   const [rewardsSub, setRewardsSub] = useState<'my' | 'all'>('my');
@@ -93,7 +103,7 @@ export function HomeScreen({
   };
 
   // The bottom nav is fixed, so its rect is computed rather than measured.
-  const navRect = (): GuideRect => ({ x: 16, y: winH - insets.bottom - 6 - 64, width: winW - 32, height: 64 });
+  const navRect = (): GuideRect => ({ x: 12, y: winH - insets.bottom - 6 - 64, width: winW - 24, height: 64 });
 
   const scrollTop = () => scrollRef.current?.scrollTo({ y: 0, animated: true });
 
@@ -176,6 +186,7 @@ export function HomeScreen({
           showsVerticalScrollIndicator={false}
           removeClippedSubviews={false}
           contentContainerStyle={styles.scrollContent}
+          refreshControl={<AppRefreshControl refreshing={refreshing} onRefresh={onRefresh} onPrimary />}
         >
           {/*
            * Home hero — greeting and loyalty content intentionally share one
@@ -266,12 +277,13 @@ export function HomeScreen({
               pointerEvents="none"
               style={[styles.heroOrbit, { top: insets.top + 65 }]}
             />
-            <Image
-              pointerEvents="none"
-              source={cylinderFor('11 KG')}
-              style={[styles.heroCylinder, { top: insets.top + 80 }]}
-              resizeMode="contain"
-            />
+            <View pointerEvents="none" style={[styles.heroCylinder, { top: insets.top + 80 }]}>
+              <Image
+                source={cylinderFor('11 KG')}
+                style={styles.heroCylinderImage}
+                resizeMode="contain"
+              />
+            </View>
             {/*
              * The reference artwork places the cylinder behind the white
              * foreground. Reusing the exact curve from the blue path makes
@@ -338,11 +350,17 @@ export function HomeScreen({
             >
               <Text style={styles.sectionTitle}>Order again</Text>
               <View style={styles.productShelf}>
-                {ORDER_AGAIN.map((item) => (
+                {orderAgain.map((item) => (
                   <Pressable
                     key={item.size}
                     style={styles.product}
-                    onPress={() => onNavigate('order-process')}
+                    onPress={() => {
+                      if (pricesError) {
+                        void refreshPrices();
+                        return;
+                      }
+                      onNavigate('order-process');
+                    }}
                   >
                     <Image
                       source={cylinderFor(item.size)}
@@ -486,6 +504,7 @@ const styles = StyleSheet.create({
     zIndex: 10,
     transform: [{ scaleX: 1.06 }],
   },
+  heroCylinderImage: { width: '100%', height: '100%' },
 
   content: { paddingHorizontal: 24, paddingTop: 18, zIndex: 1 },
   section: { paddingTop: 4 },
