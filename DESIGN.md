@@ -1,8 +1,10 @@
 # DESIGN.md — Superkalan Gaz Mobile (Customer App)
 
 > UI/UX format for the customer-facing Expo/React Native app (`SuperkalanGaz-Mobile`).
-> The screens were ported from the **Figma Make prototype** (kept in `Figma Make/` as design
-> reference only — it is raw web React and is excluded from tsc + Metro, never shipped). The
+> The screens were ported from the original
+> [Figma Make prototype](https://www.figma.com/design/AtT82H0L2pN7gKwY11PHBS/Superkalan-Gaz-Mobile-App--Copy-).
+> The generated web-React bundle was removed after the native port because it was never
+> shipped. The
 > **shared primitives in `src/components/ui/` are the reference implementation**; new screens
 > should compose them. This file governs how screens *look and are assembled*;
 > behavior/permissions come from Jira + the API.
@@ -13,7 +15,7 @@
 > sync so the CRM and the customer app read as one product.
 
 Reference implementation: `src/components/ui/` (shared primitives) + `src/screens/home/HomeScreen.tsx`.
-Design source of truth: the `Figma Make/` prototype and the tokens in `src/theme/colors.ts`.
+Design source of truth: the linked Figma design and the tokens in `src/theme/colors.ts`.
 
 ---
 
@@ -27,7 +29,7 @@ Design source of truth: the `Figma Make/` prototype and the tokens in `src/theme
 - **Token-first, never ad-hoc.** Every color comes from `@/theme/colors`, every font from
   `@/theme/fonts`. Do not inline raw hex or font strings in a screen — if a value is
   missing, add a token (§2/§3) rather than hardcoding it.
-- **Figma-accurate.** Values in the styles trace to the `Figma Make/` prototype and the
+- **Figma-accurate.** Values in the styles trace to the linked Figma design and the
   provenance comments in `colors.ts`. When a design changes, update the token/comment, not
   just the screen.
 - **Real session data only.** Greeting name, account type, points, and orders should render
@@ -263,4 +265,3 @@ Shared primitives now live in `src/components/ui/`. Reuse them; don't re-style e
 | `src/lib/phMobile.ts` | PH mobile normalization (AGENTS.md §16) |
 | `src/contexts/AuthContext.tsx` | Supabase session + account type |
 | `src/constants/config.ts` | `API_URL` runtime config |
-| `Figma Make/` | Raw web-React design source (reference only; excluded from tsc + Metro) |

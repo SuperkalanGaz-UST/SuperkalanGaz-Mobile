@@ -13,7 +13,6 @@
     "**/*.tsx"
   ],
   "exclude": [
-    "node_modules",
-    "Figma Make"
+    "node_modules"
   ]
 }
