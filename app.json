@@ -20,7 +20,13 @@
       "apiUrl": "http://localhost:3001"
     },
     "plugins": [
-      "expo-font"
+      "expo-font",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Allow Superkalan Gaz to use your location to pin a delivery address."
+        }
+      ]
     ]
   }
 }

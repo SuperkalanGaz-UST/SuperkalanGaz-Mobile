@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { ActivityIndicator, Image, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Feather, Ionicons } from '@expo/vector-icons';
+import * as Location from 'expo-location';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors } from '@/theme/colors';
 import { fonts } from '@/theme/fonts';
@@ -9,22 +10,47 @@ import { cylinderFor, images } from '@/lib/assets';
 import { PrimaryButton } from '@/components/ui/controls';
 import { Toast } from '@/components/ui/overlays';
 import { CylinderSize, formatPeso, usePricing } from '@/contexts/PricingContext';
+import { normalizePhMobile } from '@/lib/phMobile';
 import type { MainScreen, MainTab } from '@/navigation/types';
+import { AddressMap } from '@/components/maps/AddressMap';
 
 /**
- * Order flow (Figma "OrderProcess"): product select → delivery timing → review
- * → track. Includes address / schedule / payment sheets, the confirm dialog,
- * and post-delivery feedback. Maps to the SRD module; `order_source = Mobile App`
- * is implied.
+ * Order flow (Figma "OrderProcess"): delivery address + branch → product select
+ * → delivery timing → review → track. Includes address / schedule / payment
+ * sheets, the confirm dialog, and post-delivery feedback. Maps to the SRD
+ * module; `order_source = Mobile App` is implied.
  *
  * Pricing comes from the shared SRD catalog. ETA and tracking remain Figma mock
  * data until their SRD endpoints are wired. Never show live rider GPS.
  */
-type Step = 'select' | 'schedule' | 'summary' | 'track';
+type Step = 'location' | 'select' | 'schedule' | 'summary' | 'track';
 type ModalKind = 'none' | 'selectAddress' | 'editAddress' | 'confirmed' | 'sched' | 'payment';
 type Payment = 'gcash' | 'maya' | 'cash';
 type FeedbackStep = 'none' | 'rider' | 'store' | 'xfeedback';
 type DeliverySchedule = 'now' | 'later';
+type AddressSelectField = 'province' | 'city' | 'barangay';
+
+type Coordinate = {
+  latitude: number;
+  longitude: number;
+};
+
+type AddressArea = {
+  cities: Record<string, readonly string[]>;
+};
+
+type SavedAddress = {
+  id: string;
+  label: string;
+  address: string;
+  province: string;
+  city: string;
+  barangay: string;
+  street: string;
+  landmark?: string;
+  contact: string;
+  coordinate?: Coordinate;
+};
 
 const PRODUCT_DETAILS: Array<{ id: CylinderSize; label: string; eta: string; use: string }> = [
   { id: '2.7kg', label: '2.7 KG', eta: '12:00 - 12:05 PM', use: 'Portable • Outdoor use' },
@@ -33,10 +59,149 @@ const PRODUCT_DETAILS: Array<{ id: CylinderSize; label: string; eta: string; use
   { id: '22kg', label: '22 KG', eta: '12:15 - 12:30 PM', use: 'Commercial • Food businesses' },
   { id: '50kg', label: '50 KG', eta: '12:30 - 1:00 PM', use: 'Heavy-duty • Large establishments' },
 ];
-const ADDRESSES = [
-  { id: 'house1', label: 'House 1', address: '123 Main St, Metro Manila' },
-  { id: 'office', label: 'Office', address: '246 Main Road, Salcedo Makati' },
-  { id: 'house2', label: 'House 2', address: '810 Main Alley, Las Pinas' },
+const ADDRESSES: SavedAddress[] = [
+  {
+    id: 'house1',
+    label: 'House 1',
+    address: '123 Main St, San Roque, Quezon City, Metro Manila',
+    province: 'Metro Manila',
+    city: 'Quezon City',
+    barangay: 'San Roque',
+    street: '123 Main St',
+    contact: '+639123456789',
+  },
+  {
+    id: 'office',
+    label: 'Office',
+    address: '246 Main Road, San Lorenzo, Makati City, Metro Manila',
+    province: 'Metro Manila',
+    city: 'Makati City',
+    barangay: 'San Lorenzo',
+    street: '246 Main Road',
+    contact: '+639123456789',
+  },
+  {
+    id: 'house2',
+    label: 'House 2',
+    address: '810 Main Alley, Talaba II, Bacoor City, Cavite',
+    province: 'Cavite',
+    city: 'Bacoor City',
+    barangay: 'Talaba II',
+    street: '810 Main Alley',
+    contact: '+639123456789',
+  },
+];
+// Temporary service-area options for the prototype. The production list and
+// nearest-branch eligibility must come from the branch-scoped NestJS API.
+const ADDRESS_AREAS: Record<string, AddressArea> = {
+  'Metro Manila': {
+    cities: {
+      'Quezon City': ['San Roque', 'Bagumbayan', 'Batasan Hills', 'Commonwealth'],
+      'City of Manila': ['Ermita', 'Malate', 'Paco', 'Sampaloc'],
+      'Makati City': ['Bel-Air', 'Poblacion', 'San Antonio', 'San Lorenzo'],
+      'Pasig City': ['Kapitolyo', 'Ortigas Center', 'Pinagbuhatan', 'Santolan'],
+    },
+  },
+  Cavite: {
+    cities: {
+      'Bacoor City': ['Alima', 'Habay I', 'Molino III', 'Talaba II'],
+      'Dasmariñas City': ['Burol', 'Paliparan I', 'Salawag', 'Sampaloc I'],
+      'Imus City': ['Alapan I-A', 'Bucandala I', 'Malagasang I-A', 'Tanzang Luma I'],
+    },
+  },
+  Rizal: {
+    cities: {
+      Antipolo: ['Cupang', 'Dalig', 'Mayamot', 'San Roque'],
+      Cainta: ['San Andres', 'San Isidro', 'San Juan', 'Santo Domingo'],
+      Taytay: ['Dolores', 'Muzon', 'San Isidro', 'Santa Ana'],
+    },
+  },
+};
+
+function cleanAddressPart(value: string | null | undefined) {
+  return value?.trim().replace(/\s+/g, ' ') ?? '';
+}
+
+function addressPartKey(value: string) {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/\b(province|city|municipality|district|barangay|brgy|of)\b/g, ' ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function matchAddressOption(candidate: string, options: string[]) {
+  const candidateKey = addressPartKey(candidate);
+  if (!candidateKey) return '';
+
+  return options.find((option) => addressPartKey(option) === candidateKey)
+    ?? options.find((option) => {
+      const optionKey = addressPartKey(option);
+      return candidateKey.length > 3
+        && optionKey.length > 3
+        && (candidateKey.includes(optionKey) || optionKey.includes(candidateKey));
+    })
+    ?? '';
+}
+
+function addResolvedAddressArea(
+  current: Record<string, AddressArea>,
+  province: string,
+  city: string,
+  barangay: string,
+) {
+  if (!province) return current;
+
+  const currentArea = current[province] ?? { cities: {} };
+  if (!city) {
+    return current[province] ? current : { ...current, [province]: currentArea };
+  }
+
+  const currentBarangays = currentArea.cities[city] ?? [];
+  const hasBarangay = barangay
+    ? currentBarangays.some((option) => addressPartKey(option) === addressPartKey(barangay))
+    : true;
+  const nextBarangays = hasBarangay ? currentBarangays : [...currentBarangays, barangay];
+
+  if (current[province] && currentArea.cities[city] && nextBarangays === currentBarangays) {
+    return current;
+  }
+
+  return {
+    ...current,
+    [province]: {
+      cities: {
+        ...currentArea.cities,
+        [city]: nextBarangays,
+      },
+    },
+  };
+}
+
+const DEFAULT_ADDRESS_CENTER: Coordinate = {
+  latitude: 14.6507,
+  longitude: 121.0489,
+};
+// Presentation fixtures only. Replace these with eligible, distance-ranked
+// branches from the NestJS API; the mobile client must not calculate or trust
+// branch assignment on its own.
+const BRANCHES = [
+  {
+    id: 'cubao',
+    name: 'Superkalan Gaz - Cubao',
+    distance: '2.3 km away',
+    hours: 'Open until 8:00 PM',
+    nearest: true,
+  },
+  {
+    id: 'kamuning',
+    name: 'Superkalan Gaz - Kamuning',
+    distance: '4.8 km away',
+    hours: 'Open until 7:00 PM',
+    nearest: false,
+  },
 ];
 const STEP_LABELS = ['Order Confirmed', 'Preparing', 'Out for Delivery', 'Delivered'];
 const CALENDAR_WEEKDAYS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
@@ -93,10 +258,13 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
     }),
     [prices],
   );
-  const [step, setStep] = useState<Step>('select');
+  const [step, setStep] = useState<Step>('location');
   const [modal, setModal] = useState<ModalKind>('none');
   const [quantities, setQuantities] = useState<Record<string, number>>({});
+  const [savedAddresses, setSavedAddresses] = useState(ADDRESSES);
+  const [addressAreas, setAddressAreas] = useState<Record<string, AddressArea>>(ADDRESS_AREAS);
   const [address, setAddress] = useState(ADDRESSES[0]);
+  const [selectedBranch, setSelectedBranch] = useState(BRANCHES[0]);
   const [payment, setPayment] = useState<Payment>('gcash');
   const [tempPayment, setTempPayment] = useState<Payment>('gcash');
   const [delivered, setDelivered] = useState(false);
@@ -114,8 +282,19 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
 
   // edit-address form
   const [eaLabel, setEaLabel] = useState('');
-  const [eaAddress, setEaAddress] = useState('');
+  const [eaProvince, setEaProvince] = useState('');
+  const [eaCity, setEaCity] = useState('');
+  const [eaBarangay, setEaBarangay] = useState('');
+  const [eaStreet, setEaStreet] = useState('');
+  const [eaLandmark, setEaLandmark] = useState('');
   const [eaContact, setEaContact] = useState('');
+  const [eaPhoneError, setEaPhoneError] = useState('');
+  const [editingAddressId, setEditingAddressId] = useState<string | null>(null);
+  const [addressSelectField, setAddressSelectField] = useState<AddressSelectField | null>(null);
+  const [addressPin, setAddressPin] = useState<Coordinate>(DEFAULT_ADDRESS_CENTER);
+  const [addressMapCenter, setAddressMapCenter] = useState<Coordinate>(DEFAULT_ADDRESS_CENTER);
+  const [locationLoading, setLocationLoading] = useState(false);
+  const [locationMessage, setLocationMessage] = useState('Move the pin or tap the map to adjust it.');
 
   const selectedProducts = products
     .map((selectedProduct) => ({
@@ -148,6 +327,187 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
       ...current,
       [productId]: Math.max(0, (current[productId] ?? 0) + amount),
     }));
+  };
+
+  const requestDeviceLocation = async () => {
+    setLocationLoading(true);
+    setLocationMessage('Finding your current location…');
+
+    try {
+      const permission = await Location.requestForegroundPermissionsAsync();
+      if (permission.status !== Location.PermissionStatus.GRANTED) {
+        setLocationMessage('Location access is off. You can still adjust the pin manually.');
+        return;
+      }
+
+      const current = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+      const nextCoordinate = {
+        latitude: current.coords.latitude,
+        longitude: current.coords.longitude,
+      };
+      setAddressPin(nextCoordinate);
+      setAddressMapCenter(nextCoordinate);
+      setLocationMessage('Location found. Filling address details…');
+
+      const [geocoded] = await Location.reverseGeocodeAsync(nextCoordinate);
+      if (!geocoded) {
+        setLocationMessage('Pin placed. Enter the address details that could not be detected.');
+        return;
+      }
+
+      const rawRegion = cleanAddressPart(geocoded.region);
+      const regionKey = addressPartKey(rawRegion);
+      const provinceCandidate = ['national capital region', 'ncr', 'metropolitan manila', 'metro manila']
+        .includes(regionKey)
+        ? 'Metro Manila'
+        : rawRegion;
+      const province = matchAddressOption(provinceCandidate, Object.keys(addressAreas))
+        || provinceCandidate;
+
+      const rawCity = cleanAddressPart(geocoded.city)
+        || (addressPartKey(cleanAddressPart(geocoded.subregion)) !== addressPartKey(province)
+          ? cleanAddressPart(geocoded.subregion)
+          : '');
+      const cityOptions = Object.keys(addressAreas[province]?.cities ?? {});
+      const city = matchAddressOption(rawCity, cityOptions) || rawCity;
+
+      const subregion = cleanAddressPart(geocoded.subregion);
+      const rawBarangay = cleanAddressPart(geocoded.district)
+        || (subregion
+          && ![province, city].some((part) => part && addressPartKey(part) === addressPartKey(subregion))
+          ? subregion
+          : '');
+      const barangayOptions = addressAreas[province]?.cities[city] ?? [];
+      const barangay = matchAddressOption(rawBarangay, [...barangayOptions]) || rawBarangay;
+
+      const formattedStreet = cleanAddressPart(geocoded.formattedAddress).split(',')[0] ?? '';
+      const explicitStreet = [cleanAddressPart(geocoded.streetNumber), cleanAddressPart(geocoded.street)]
+        .filter(Boolean)
+        .join(' ');
+      const street = explicitStreet
+        || (![barangay, city, province].some((part) => (
+          part && addressPartKey(part) === addressPartKey(formattedStreet)
+        )) ? formattedStreet : '');
+      const placemark = cleanAddressPart(geocoded.name);
+      const landmark = placemark
+        && ![street, barangay, city, province].some((part) => part && addressPartKey(part) === addressPartKey(placemark))
+        ? placemark
+        : '';
+
+      setEaProvince(province);
+      setEaCity(city);
+      setEaBarangay(barangay);
+      if (street) setEaStreet(street);
+      if (landmark) setEaLandmark(landmark);
+      setAddressAreas((currentAreas) => addResolvedAddressArea(
+        currentAreas,
+        province,
+        city,
+        barangay,
+      ));
+
+      const missingDetails = [
+        !province ? 'province' : '',
+        !city ? 'city/municipality' : '',
+        !barangay ? 'barangay' : '',
+        !street ? 'street/unit' : '',
+      ].filter(Boolean);
+      setLocationMessage(missingDetails.length
+        ? `Location found. Add or verify ${missingDetails.join(', ')}.`
+        : 'Address details filled. Add your unit number if applicable.');
+    } catch {
+      setLocationMessage('We could not get your location. You can adjust the pin manually.');
+    } finally {
+      setLocationLoading(false);
+    }
+  };
+
+  const openAddressEditor = (existing?: SavedAddress) => {
+    setEditingAddressId(existing?.id ?? null);
+    setEaLabel(existing?.label ?? 'Home');
+    setEaProvince(existing?.province ?? '');
+    setEaCity(existing?.city ?? '');
+    setEaBarangay(existing?.barangay ?? '');
+    setEaStreet(existing?.street ?? '');
+    setEaLandmark(existing?.landmark ?? '');
+    setEaContact(existing?.contact.slice(3) ?? '');
+    setEaPhoneError('');
+    setAddressSelectField(null);
+
+    if (existing?.coordinate) {
+      setAddressPin(existing.coordinate);
+      setAddressMapCenter(existing.coordinate);
+      setLocationMessage('Pin placed at this saved address.');
+    } else {
+      setLocationMessage('Move the pin or tap the map to adjust it.');
+    }
+
+    setModal('editAddress');
+    if (!existing) void requestDeviceLocation();
+  };
+
+  const updateAddressPin = (coordinate: Coordinate) => {
+    setAddressPin(coordinate);
+    setLocationMessage('Pin adjusted for this delivery address.');
+  };
+
+  const addressSelectOptions = addressSelectField === 'province'
+    ? Object.keys(addressAreas)
+    : addressSelectField === 'city'
+      ? Object.keys(addressAreas[eaProvince]?.cities ?? {})
+      : addressAreas[eaProvince]?.cities[eaCity] ?? [];
+
+  const selectAddressOption = (value: string) => {
+    if (addressSelectField === 'province') {
+      const nextCity = Object.keys(addressAreas[value]?.cities ?? {})[0] ?? '';
+      setEaProvince(value);
+      setEaCity(nextCity);
+      setEaBarangay(addressAreas[value]?.cities[nextCity]?.[0] ?? '');
+    } else if (addressSelectField === 'city') {
+      setEaCity(value);
+      setEaBarangay(addressAreas[eaProvince]?.cities[value]?.[0] ?? '');
+    } else if (addressSelectField === 'barangay') {
+      setEaBarangay(value);
+    }
+    setAddressSelectField(null);
+  };
+
+  const saveAddress = () => {
+    const label = eaLabel.trim();
+    const street = eaStreet.trim();
+    const normalizedContact = normalizePhMobile(eaContact);
+
+    if (!label || !street || !eaProvince || !eaCity || !eaBarangay) {
+      showToast('Complete all required address fields.');
+      return;
+    }
+    if (!normalizedContact) {
+      setEaPhoneError('Enter a valid PH mobile number');
+      return;
+    }
+
+    const nextAddress: SavedAddress = {
+      id: editingAddressId ?? `address-${Date.now()}`,
+      label,
+      address: `${street}, ${eaBarangay}, ${eaCity}, ${eaProvince}`,
+      province: eaProvince,
+      city: eaCity,
+      barangay: eaBarangay,
+      street,
+      landmark: eaLandmark.trim() || undefined,
+      contact: normalizedContact,
+      coordinate: addressPin,
+    };
+
+    setSavedAddresses((current) => {
+      const exists = current.some((savedAddress) => savedAddress.id === nextAddress.id);
+      return exists
+        ? current.map((savedAddress) => savedAddress.id === nextAddress.id ? nextAddress : savedAddress)
+        : [...current, nextAddress];
+    });
+    setAddress(nextAddress);
+    setModal('none');
+    showToast(editingAddressId ? 'Address updated.' : 'Address saved.');
   };
 
   const openScheduleModal = () => {
@@ -210,6 +570,99 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
     );
 
   /* ── Steps ── */
+  const renderLocation = () => (
+    <View style={styles.locationScreen}>
+      <ScrollView
+        style={styles.selectScroll}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.locationContent}
+      >
+        <Text style={styles.stepCounter}>STEP 1 OF 4</Text>
+        <View style={styles.progressTrack}><View style={[styles.progressFill, { width: '25%' }]} /></View>
+
+        <Text style={styles.locationTitle}>Where should we deliver?</Text>
+        <Text style={styles.locationSubtitle}>Choose your address and nearest branch.</Text>
+
+        <Text style={styles.locationSectionLabel}>DELIVERY ADDRESS</Text>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Selected delivery address: ${address.label}, ${address.address}`}
+          accessibilityHint="Opens your saved addresses"
+          onPress={() => setModal('selectAddress')}
+          style={({ pressed }) => [styles.locationAddressCard, pressed ? styles.controlPressed : null]}
+        >
+          <View style={styles.locationIconWrap}>
+            <Feather name="map-pin" size={24} color={colors.heading} />
+          </View>
+          <View style={styles.locationAddressCopy}>
+            <Text style={styles.locationAddressLabel}>{address.label}</Text>
+            <Text style={styles.locationAddressText}>{address.address}</Text>
+          </View>
+          <Feather name="check-circle" size={22} color={colors.primary} />
+          <Feather name="chevron-right" size={22} color={colors.heading} />
+        </Pressable>
+
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => openAddressEditor()}
+          style={({ pressed }) => [styles.addAddressButton, pressed ? styles.controlPressed : null]}
+        >
+          <Feather name="plus" size={20} color={colors.primary} />
+          <Text style={styles.addAddressText}>Add another address</Text>
+        </Pressable>
+
+        <View style={styles.locationDivider} />
+        <Text style={styles.locationSectionLabel}>SELECT A BRANCH</Text>
+        {BRANCHES.map((branch) => {
+          const selected = selectedBranch.id === branch.id;
+          return (
+            <Pressable
+              key={branch.id}
+              accessibilityRole="radio"
+              accessibilityLabel={`${branch.name}, ${branch.distance}, ${branch.hours}`}
+              accessibilityState={{ checked: selected }}
+              onPress={() => setSelectedBranch(branch)}
+              style={({ pressed }) => [
+                styles.branchCard,
+                selected ? styles.branchCardSelected : null,
+                pressed ? styles.controlPressed : null,
+              ]}
+            >
+              <View style={styles.branchIconWrap}>
+                <Feather name="home" size={24} color={colors.heading} />
+              </View>
+              <View style={styles.branchCopy}>
+                {branch.nearest ? (
+                  <View style={styles.nearestBadge}>
+                    <Text style={styles.nearestBadgeText}>NEAREST BRANCH</Text>
+                  </View>
+                ) : null}
+                <Text style={styles.branchName}>{branch.name}</Text>
+                <Text style={styles.branchMeta}>{branch.distance} • {branch.hours}</Text>
+                {branch.nearest ? (
+                  <View style={styles.branchAvailability}>
+                    <Feather name="check-circle" size={14} color={colors.primary} />
+                    <Text style={styles.branchAvailabilityText}>Available for delivery</Text>
+                  </View>
+                ) : null}
+              </View>
+              <Ionicons
+                name={selected ? 'radio-button-on' : 'radio-button-off'}
+                size={24}
+                color={selected ? colors.primary : colors.muted}
+              />
+            </Pressable>
+          );
+        })}
+      </ScrollView>
+
+      <View style={[styles.locationFooter, { paddingBottom: Math.max(insets.bottom, 16) }]}>
+        <PrimaryButton label="Choose cylinders" onPress={() => setStep('select')} />
+        <Text style={styles.locationReassurance}>You can change this before checkout.</Text>
+      </View>
+    </View>
+  );
+
   const renderSelect = () => (
     <View style={styles.selectScreen}>
       <ScrollView
@@ -217,8 +670,8 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.selectContent}
       >
-        <Text style={styles.stepCounter}>STEP 1 OF 3</Text>
-        <View style={styles.progressTrack}><View style={[styles.progressFill, { width: '34%' }]} /></View>
+        <Text style={styles.stepCounter}>STEP 2 OF 4</Text>
+        <View style={styles.progressTrack}><View style={[styles.progressFill, { width: '50%' }]} /></View>
         <Text style={styles.selectTitle}>Build your order</Text>
         <Text style={styles.selectSubtitle}>Add one or more cylinder sizes.</Text>
 
@@ -347,8 +800,8 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
 
   const renderSchedule = () => (
     <View style={styles.scheduleStepWrap}>
-      <Text style={styles.stepCounter}>STEP 2 OF 3</Text>
-      <View style={styles.progressTrack}><View style={[styles.progressFill, { width: '67%' }]} /></View>
+      <Text style={styles.stepCounter}>STEP 3 OF 4</Text>
+      <View style={styles.progressTrack}><View style={[styles.progressFill, { width: '75%' }]} /></View>
 
       <Text style={styles.scheduleStepTitle}>When should we deliver?</Text>
       <Text style={styles.scheduleStepSubtitle}>Choose a delivery option before reviewing your order.</Text>
@@ -421,7 +874,7 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
 
   const renderSummary = () => (
     <View style={styles.summaryWrap}>
-      <Text style={styles.stepCounter}>STEP 3 OF 3</Text>
+      <Text style={styles.stepCounter}>STEP 4 OF 4</Text>
       <View style={styles.progressTrack}><View style={[styles.progressFill, { width: '100%' }]} /></View>
 
       <Text style={styles.sumSection}>Order Summary</Text>
@@ -447,8 +900,9 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
       <Text style={styles.sumSection}>Delivery Details</Text>
       {summaryRow('Name:', 'Juan Dela Cruz')}
       {summaryRow('Address:', address.address)}
-      <Pressable style={{ alignSelf: 'flex-end' }} onPress={() => setModal('selectAddress')}>
-        <Text style={styles.miniLink}>Select Address</Text>
+      {summaryRow('Branch:', selectedBranch.name)}
+      <Pressable style={{ alignSelf: 'flex-end' }} onPress={() => setStep('location')}>
+        <Text style={styles.miniLink}>Change delivery details</Text>
       </Pressable>
       {summaryRow('Contact:', '09123456789')}
       <View style={styles.hair} />
@@ -509,7 +963,7 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
           <View style={styles.orderPill}><Text style={styles.orderPillText}>ORDER# 12345</Text></View>
         </View>
         <Text style={styles.etaBig}>{estimatedEtaLabel}</Text>
-        <Text style={styles.trackStatus}>Superkalan Gaz - Metro Manila Branch is preparing your order.</Text>
+        <Text style={styles.trackStatus}>{selectedBranch.name} is preparing your order.</Text>
         <View style={{ marginBottom: 12 }}>{stepper(2)}</View>
         <Text style={styles.trackNotify}>We'll notify you if your order is out for delivery.</Text>
         <View style={styles.riderRow}>
@@ -544,7 +998,8 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
       <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
         <Pressable
           onPress={() => {
-            if (step === 'select') onNavigate('home', { tab: 'home' });
+            if (step === 'location') onNavigate('home', { tab: 'home' });
+            else if (step === 'select') setStep('location');
             else if (step === 'schedule') setStep('select');
             else if (step === 'summary') setStep('schedule');
             else setStep('summary');
@@ -557,7 +1012,9 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
         <View style={{ width: 24 }} />
       </View>
 
-      {step === 'select' ? (
+      {step === 'location' ? (
+        renderLocation()
+      ) : step === 'select' ? (
         renderSelect()
       ) : (
         <ScrollView style={styles.flex} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 32 }}>
@@ -577,52 +1034,226 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
               <Text style={styles.dialogTitle}>Select Address</Text>
               <Pressable onPress={() => setModal('none')} hitSlop={8}><Feather name="x" size={20} color={colors.cardBorder} /></Pressable>
             </View>
-            {ADDRESSES.map((a) => {
+            {savedAddresses.map((a) => {
               const sel = address.id === a.id;
               return (
                 <View key={a.id} style={styles.addrRow}>
-                  <Pressable style={styles.addrLeft} onPress={() => setAddress(a)}>
+                  <Pressable style={styles.addrLeft} onPress={() => { setAddress(a); setModal('none'); }}>
                     <Ionicons name={sel ? 'radio-button-on' : 'radio-button-off'} size={18} color={sel ? colors.primary : colors.gray} />
                     <View>
                       <Text style={styles.addrLabel}>{a.label}</Text>
                       <Text style={styles.addrText}>{a.address}</Text>
                     </View>
                   </Pressable>
-                  <Pressable onPress={() => { setEaLabel(a.label); setEaAddress(a.address); setEaContact('09123456789'); setModal('editAddress'); }}>
+                  <Pressable onPress={() => openAddressEditor(a)}>
                     <Text style={styles.miniLink}>Change</Text>
                   </Pressable>
                 </View>
               );
             })}
-            <Pressable onPress={() => { setEaLabel(''); setEaAddress(''); setEaContact(''); setModal('editAddress'); }}>
+            <Pressable onPress={() => openAddressEditor()}>
               <Text style={styles.addNew}>+  Add New Address</Text>
             </Pressable>
           </View>
         </View>
       </Modal>
 
-      {/* Edit Address */}
-      <Modal visible={modal === 'editAddress'} transparent animationType="fade" onRequestClose={() => setModal('selectAddress')}>
-        <View style={styles.centerBackdrop}>
-          <View style={styles.dialog}>
-            <View style={styles.dialogHead}>
-              <Text style={styles.dialogTitle}>Edit Address</Text>
-              <Pressable onPress={() => setModal('selectAddress')} hitSlop={8}><Feather name="x" size={20} color={colors.cardBorder} /></Pressable>
+      {/* Add / edit delivery address */}
+      <Modal visible={modal === 'editAddress'} transparent animationType="fade" onRequestClose={() => setModal('none')}>
+        <View style={styles.addressModalBackdrop}>
+          <View style={styles.addressDialog}>
+            <View style={styles.addressDialogHead}>
+              <Text style={styles.addressDialogTitle}>
+                {editingAddressId ? 'Edit delivery address' : 'Add delivery address'}
+              </Text>
+              <Pressable accessibilityRole="button" accessibilityLabel="Close address form" onPress={() => setModal('none')} hitSlop={8}>
+                <Feather name="x" size={22} color={colors.muted} />
+              </Pressable>
             </View>
-            {[
-              { label: 'Label Address', value: eaLabel, set: setEaLabel, ph: 'House 1' },
-              { label: 'Address', value: eaAddress, set: setEaAddress, ph: '123 Main St., Metro Manila' },
-              { label: 'Contact Number', value: eaContact, set: setEaContact, ph: '09123456789' },
-            ].map((f) => (
-              <View key={f.label} style={{ marginBottom: 12 }}>
-                <Text style={styles.eaLabel}>{f.label}</Text>
-                <TextInput style={styles.eaInput} value={f.value} onChangeText={f.set} placeholder={f.ph} placeholderTextColor={colors.muted} />
+
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+              contentContainerStyle={styles.addressDialogContent}
+            >
+              <View style={styles.addressMapWrap}>
+                <AddressMap
+                  center={addressMapCenter}
+                  pin={addressPin}
+                  onPinChange={updateAddressPin}
+                />
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={locationLoading}
+                  onPress={() => void requestDeviceLocation()}
+                  style={({ pressed }) => [
+                    styles.useLocationButton,
+                    pressed && !locationLoading ? styles.controlPressed : null,
+                  ]}
+                >
+                  {locationLoading
+                    ? <ActivityIndicator size="small" color={colors.primary} />
+                    : <Feather name="navigation" size={16} color={colors.primary} />}
+                  <Text style={styles.useLocationText}>
+                    {locationLoading ? 'Locating…' : 'Use my location'}
+                  </Text>
+                </Pressable>
               </View>
-            ))}
-            <Pressable style={[styles.cta, { alignSelf: 'center', width: '90%', marginTop: 4 }]} onPress={() => { setModal('none'); showToast('All changes are saved!'); }}>
-              <Text style={styles.ctaText}>SAVE CHANGES</Text>
-            </Pressable>
+
+              <View style={styles.pinStatusRow}>
+                <Feather name="map-pin" size={16} color={colors.primary} />
+                <Text style={styles.pinStatusText}>{locationMessage}</Text>
+              </View>
+
+              <View style={styles.addressFormRow}>
+                <View style={styles.addressFormColumn}>
+                  <Text style={styles.addressFieldLabel}>Address label</Text>
+                  <TextInput
+                    style={styles.addressField}
+                    value={eaLabel}
+                    onChangeText={setEaLabel}
+                    placeholder="Home"
+                    placeholderTextColor={colors.muted}
+                  />
+                </View>
+                <View style={styles.addressFormColumn}>
+                  <Text style={styles.addressFieldLabel}>Contact number</Text>
+                  <View style={[styles.addressPhoneField, eaPhoneError ? styles.addressFieldError : null]}>
+                    <Text style={styles.addressPhonePrefix}>+63</Text>
+                    <TextInput
+                      style={styles.addressPhoneInput}
+                      value={eaContact}
+                      onChangeText={(value) => {
+                        setEaContact(value.replace(/\D/g, '').slice(0, 10));
+                        if (eaPhoneError) setEaPhoneError('');
+                      }}
+                      keyboardType="phone-pad"
+                      placeholder="9XX XXX XXXX"
+                      placeholderTextColor={colors.muted}
+                    />
+                  </View>
+                  {eaPhoneError ? <Text style={styles.addressErrorText}>{eaPhoneError}</Text> : null}
+                </View>
+              </View>
+
+              <View style={styles.addressFormRow}>
+                <View style={styles.addressFormColumn}>
+                  <Text style={styles.addressFieldLabel}>Province / HUC</Text>
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={() => setAddressSelectField('province')}
+                    style={styles.addressSelect}
+                  >
+                    <Text
+                      style={[styles.addressSelectText, !eaProvince ? styles.addressSelectPlaceholder : null]}
+                      numberOfLines={1}
+                    >
+                      {eaProvince || 'Select province'}
+                    </Text>
+                    <Feather name="chevron-down" size={18} color={colors.gray} />
+                  </Pressable>
+                </View>
+                <View style={styles.addressFormColumn}>
+                  <Text style={styles.addressFieldLabel}>City / Municipality</Text>
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={() => setAddressSelectField('city')}
+                    style={styles.addressSelect}
+                  >
+                    <Text
+                      style={[styles.addressSelectText, !eaCity ? styles.addressSelectPlaceholder : null]}
+                      numberOfLines={1}
+                    >
+                      {eaCity || 'Select city'}
+                    </Text>
+                    <Feather name="chevron-down" size={18} color={colors.gray} />
+                  </Pressable>
+                </View>
+              </View>
+
+              <View style={styles.addressFormRow}>
+                <View style={styles.addressFormColumn}>
+                  <Text style={styles.addressFieldLabel}>Barangay</Text>
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={() => setAddressSelectField('barangay')}
+                    style={styles.addressSelect}
+                  >
+                    <Text
+                      style={[styles.addressSelectText, !eaBarangay ? styles.addressSelectPlaceholder : null]}
+                      numberOfLines={1}
+                    >
+                      {eaBarangay || 'Select barangay'}
+                    </Text>
+                    <Feather name="chevron-down" size={18} color={colors.gray} />
+                  </Pressable>
+                </View>
+                <View style={styles.addressFormColumn}>
+                  <Text style={styles.addressFieldLabel}>Street / Unit</Text>
+                  <TextInput
+                    style={styles.addressField}
+                    value={eaStreet}
+                    onChangeText={setEaStreet}
+                    placeholder="123 Mabini Street"
+                    placeholderTextColor={colors.muted}
+                  />
+                </View>
+              </View>
+
+              <Text style={styles.addressFieldLabel}>Landmark (optional)</Text>
+              <TextInput
+                style={styles.addressField}
+                value={eaLandmark}
+                onChangeText={setEaLandmark}
+                placeholder="Near school, store, or subdivision"
+                placeholderTextColor={colors.muted}
+              />
+
+              <View style={styles.addressPrivacyRow}>
+                <Feather name="shield" size={18} color={colors.primary} />
+                <Text style={styles.addressPrivacyText}>Used only to confirm this delivery address.</Text>
+              </View>
+
+              <PrimaryButton label="Save address" onPress={saveAddress} style={styles.addressSaveButton} />
+            </ScrollView>
           </View>
+
+          {addressSelectField ? (
+            <View style={styles.addressPickerLayer}>
+              <Pressable style={StyleSheet.absoluteFill} onPress={() => setAddressSelectField(null)} />
+              <View style={styles.addressPickerCard}>
+                <View style={styles.addressPickerHead}>
+                  <Text style={styles.addressPickerTitle}>
+                    {addressSelectField === 'province'
+                      ? 'Select Province / HUC'
+                      : addressSelectField === 'city'
+                        ? 'Select City / Municipality'
+                        : 'Select Barangay'}
+                  </Text>
+                  <Pressable onPress={() => setAddressSelectField(null)} hitSlop={8}>
+                    <Feather name="x" size={20} color={colors.gray} />
+                  </Pressable>
+                </View>
+                <ScrollView style={styles.addressPickerList}>
+                  {addressSelectOptions.map((option) => (
+                    <Pressable
+                      key={option}
+                      accessibilityRole="button"
+                      onPress={() => selectAddressOption(option)}
+                      style={styles.addressPickerOption}
+                    >
+                      <Text style={styles.addressPickerOptionText}>{option}</Text>
+                      {(addressSelectField === 'province' && option === eaProvince)
+                        || (addressSelectField === 'city' && option === eaCity)
+                        || (addressSelectField === 'barangay' && option === eaBarangay)
+                        ? <Feather name="check" size={18} color={colors.primary} />
+                        : null}
+                    </Pressable>
+                  ))}
+                </ScrollView>
+              </View>
+            </View>
+          ) : null}
         </View>
       </Modal>
 
@@ -759,7 +1390,7 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
             <View style={styles.confirmCircle}><Feather name="check" size={56} color="#fff" /></View>
             <Text style={styles.confirmTitle}>Order Confirmed!</Text>
             <Text style={styles.confirmBody}>
-              Order# 12345 is confirmed at 11:30 AM{'\n'}Branch: Superkalan Gaz - Metro Manila{'\n'}Contact Number: 09171234567
+              Order# 12345 is confirmed at 11:30 AM{'\n'}Branch: {selectedBranch.name}{'\n'}Contact Number: 09171234567
               {deliverySchedule === 'later' && scheduledLabel
                 ? `\nScheduled Delivery: ${scheduledLabel}`
                 : `\nEstimated Delivery: ${estimatedEtaLabel}`}
@@ -830,6 +1461,60 @@ const styles = StyleSheet.create({
   stepCounter: { fontFamily: fonts.semibold, fontSize: 9, color: colors.gray, marginBottom: 4 },
   progressTrack: { height: 4, borderRadius: radii.card, backgroundColor: colors.cardBorder, overflow: 'hidden' },
   progressFill: { height: '100%', borderRadius: radii.card, backgroundColor: colors.primary },
+
+  locationScreen: { flex: 1, backgroundColor: colors.surface },
+  locationContent: { paddingHorizontal: 16, paddingTop: 8, paddingBottom: 24 },
+  locationTitle: { fontFamily: fonts.bold, fontSize: 24, lineHeight: 32, color: colors.heading, marginTop: 24 },
+  locationSubtitle: { fontFamily: fonts.regular, fontSize: 14, lineHeight: 21, color: colors.grayText, marginTop: 2 },
+  locationSectionLabel: { fontFamily: fonts.semibold, fontSize: 12, color: colors.gray, marginTop: 24, marginBottom: 10 },
+  locationAddressCard: {
+    minHeight: 92,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+    borderRadius: radii.card,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: colors.surface,
+  },
+  locationIconWrap: { width: 34, alignItems: 'center', justifyContent: 'center' },
+  locationAddressCopy: { flex: 1 },
+  locationAddressLabel: { fontFamily: fonts.semibold, fontSize: 16, color: colors.heading, marginBottom: 2 },
+  locationAddressText: { fontFamily: fonts.regular, fontSize: 12, lineHeight: 18, color: colors.grayText },
+  addAddressButton: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: 8, alignSelf: 'flex-start', marginTop: 10 },
+  addAddressText: { fontFamily: fonts.medium, fontSize: 13, color: colors.primary },
+  locationDivider: { height: 1, backgroundColor: colors.border, marginTop: 14 },
+  branchCard: {
+    minHeight: 104,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+    borderRadius: radii.card,
+    padding: 14,
+    marginBottom: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: colors.surface,
+  },
+  branchCardSelected: { borderWidth: 2, borderColor: colors.primary, backgroundColor: 'rgba(0,123,193,0.03)' },
+  branchIconWrap: { width: 36, alignItems: 'center', justifyContent: 'center' },
+  branchCopy: { flex: 1 },
+  nearestBadge: { alignSelf: 'flex-start', borderRadius: radii.chip, backgroundColor: colors.primaryTint, paddingHorizontal: 7, paddingVertical: 3, marginBottom: 6 },
+  nearestBadgeText: { fontFamily: fonts.semibold, fontSize: 9, color: colors.primary },
+  branchName: { fontFamily: fonts.semibold, fontSize: 15, lineHeight: 20, color: colors.heading },
+  branchMeta: { fontFamily: fonts.regular, fontSize: 11, lineHeight: 17, color: colors.grayText, marginTop: 2 },
+  branchAvailability: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 7 },
+  branchAvailabilityText: { fontFamily: fonts.medium, fontSize: 11, color: colors.primary },
+  locationFooter: {
+    paddingHorizontal: 20,
+    paddingTop: 14,
+    backgroundColor: colors.surface,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  locationReassurance: { fontFamily: fonts.regular, fontSize: 11, color: colors.grayText, textAlign: 'center', marginTop: 10 },
 
   selectScreen: { flex: 1, backgroundColor: colors.surface },
   selectScroll: { flex: 1 },
@@ -949,8 +1634,121 @@ const styles = StyleSheet.create({
   addrLabel: { fontFamily: fonts.regular, fontSize: 15, color: '#1e1e1e' },
   addrText: { fontFamily: fonts.regular, fontSize: 13, color: colors.gray },
   addNew: { fontFamily: fonts.semibold, fontSize: 11, color: colors.primary, textAlign: 'center', paddingTop: 4 },
-  eaLabel: { fontFamily: fonts.medium, fontSize: 10, color: colors.primary, marginBottom: 4 },
-  eaInput: { height: 30, borderWidth: 1, borderColor: colors.cardBorder, borderRadius: radii.chip, paddingHorizontal: 8, fontFamily: fonts.regular, fontSize: 12, color: colors.grayText },
+
+  addressModalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(24,36,46,0.48)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 24,
+  },
+  addressDialog: {
+    width: '100%',
+    maxWidth: 430,
+    maxHeight: '90%',
+    backgroundColor: colors.surface,
+    borderRadius: 16,
+    overflow: 'hidden',
+    ...cardShadow,
+  },
+  addressDialogHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 12,
+  },
+  addressDialogTitle: { fontFamily: fonts.semibold, fontSize: 18, color: colors.heading },
+  addressDialogContent: { paddingHorizontal: 14, paddingBottom: 16 },
+  addressMapWrap: { height: 154, borderRadius: radii.card, overflow: 'hidden', backgroundColor: colors.redeemPale },
+  useLocationButton: {
+    position: 'absolute',
+    right: 10,
+    bottom: 10,
+    minHeight: 40,
+    paddingHorizontal: 12,
+    borderRadius: radii.button,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+    backgroundColor: colors.surface,
+    ...cardShadow,
+  },
+  useLocationText: { fontFamily: fonts.semibold, fontSize: 12, color: colors.primary },
+  pinStatusRow: { minHeight: 40, flexDirection: 'row', alignItems: 'center', gap: 7 },
+  pinStatusText: { flex: 1, fontFamily: fonts.medium, fontSize: 11, lineHeight: 16, color: colors.primary },
+  addressFormRow: { flexDirection: 'row', gap: 10, marginBottom: 10 },
+  addressFormColumn: { flex: 1, minWidth: 0 },
+  addressFieldLabel: { fontFamily: fonts.medium, fontSize: 10, color: colors.primary, marginBottom: 4 },
+  addressField: {
+    height: 44,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+    borderRadius: radii.button,
+    paddingHorizontal: 10,
+    fontFamily: fonts.regular,
+    fontSize: 12,
+    color: colors.grayText,
+    backgroundColor: colors.surface,
+  },
+  addressFieldError: { borderColor: colors.danger },
+  addressErrorText: { marginTop: 3, fontFamily: fonts.regular, fontSize: 9, lineHeight: 12, color: colors.danger },
+  addressPhoneField: {
+    height: 44,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+    borderRadius: radii.button,
+    flexDirection: 'row',
+    alignItems: 'center',
+    overflow: 'hidden',
+    backgroundColor: colors.surface,
+  },
+  addressPhonePrefix: {
+    height: '100%',
+    paddingHorizontal: 9,
+    textAlignVertical: 'center',
+    borderRightWidth: 1,
+    borderRightColor: colors.cardBorder,
+    fontFamily: fonts.medium,
+    fontSize: 12,
+    lineHeight: 42,
+    color: colors.heading,
+  },
+  addressPhoneInput: { flex: 1, height: '100%', paddingHorizontal: 8, fontFamily: fonts.regular, fontSize: 11, color: colors.grayText },
+  addressSelect: {
+    height: 44,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+    borderRadius: radii.button,
+    paddingHorizontal: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 4,
+    backgroundColor: colors.surface,
+  },
+  addressSelectText: { flex: 1, fontFamily: fonts.regular, fontSize: 11, color: colors.grayText },
+  addressSelectPlaceholder: { color: colors.muted },
+  addressPrivacyRow: { minHeight: 42, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  addressPrivacyText: { flex: 1, fontFamily: fonts.regular, fontSize: 10, lineHeight: 15, color: colors.grayText },
+  addressSaveButton: { marginTop: 2 },
+  addressPickerLayer: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 28,
+    backgroundColor: 'rgba(24,36,46,0.34)',
+  },
+  addressPickerCard: { width: '100%', maxWidth: 350, maxHeight: '58%', borderRadius: radii.card, backgroundColor: colors.surface, padding: 16, ...cardShadow },
+  addressPickerHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
+  addressPickerTitle: { flex: 1, fontFamily: fonts.semibold, fontSize: 15, color: colors.heading },
+  addressPickerList: { flexGrow: 0 },
+  addressPickerOption: { minHeight: 46, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: 1, borderBottomColor: colors.border },
+  addressPickerOptionText: { flex: 1, fontFamily: fonts.regular, fontSize: 13, color: colors.grayText },
 
   scheduleDialog: { maxWidth: 380 },
   calendarBox: { backgroundColor: colors.redeemPale, borderRadius: 8, padding: 12, marginBottom: 12 },
