@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { ActivityIndicator, Image, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, FlatList, Image, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -10,7 +10,9 @@ import { cylinderFor, images } from '@/lib/assets';
 import { PrimaryButton } from '@/components/ui/controls';
 import { Toast } from '@/components/ui/overlays';
 import { CylinderSize, formatPeso, usePricing } from '@/contexts/PricingContext';
+import { useAuth } from '@/contexts/AuthContext';
 import { normalizePhMobile } from '@/lib/phMobile';
+import { PH_ADDRESS_AREAS, PH_LOCATION_DATA_VERSION, type PhAddressArea } from '@/lib/phLocations';
 import type { MainScreen, MainTab } from '@/navigation/types';
 import { AddressMap } from '@/components/maps/AddressMap';
 
@@ -35,10 +37,6 @@ type Coordinate = {
   longitude: number;
 };
 
-type AddressArea = {
-  cities: Record<string, readonly string[]>;
-};
-
 type SavedAddress = {
   id: string;
   label: string;
@@ -52,6 +50,14 @@ type SavedAddress = {
   coordinate?: Coordinate;
 };
 
+type BranchOption = {
+  id: string;
+  name: string;
+  distance: string;
+  hours: string;
+  nearest: boolean;
+};
+
 const PRODUCT_DETAILS: Array<{ id: CylinderSize; label: string; eta: string; use: string }> = [
   { id: '2.7kg', label: '2.7 KG', eta: '12:00 - 12:05 PM', use: 'Portable • Outdoor use' },
   { id: '5kg', label: '5 KG', eta: '12:00 - 12:10 PM', use: 'Compact • Small households' },
@@ -59,65 +65,6 @@ const PRODUCT_DETAILS: Array<{ id: CylinderSize; label: string; eta: string; use
   { id: '22kg', label: '22 KG', eta: '12:15 - 12:30 PM', use: 'Commercial • Food businesses' },
   { id: '50kg', label: '50 KG', eta: '12:30 - 1:00 PM', use: 'Heavy-duty • Large establishments' },
 ];
-const ADDRESSES: SavedAddress[] = [
-  {
-    id: 'house1',
-    label: 'House 1',
-    address: '123 Main St, San Roque, Quezon City, Metro Manila',
-    province: 'Metro Manila',
-    city: 'Quezon City',
-    barangay: 'San Roque',
-    street: '123 Main St',
-    contact: '+639123456789',
-  },
-  {
-    id: 'office',
-    label: 'Office',
-    address: '246 Main Road, San Lorenzo, Makati City, Metro Manila',
-    province: 'Metro Manila',
-    city: 'Makati City',
-    barangay: 'San Lorenzo',
-    street: '246 Main Road',
-    contact: '+639123456789',
-  },
-  {
-    id: 'house2',
-    label: 'House 2',
-    address: '810 Main Alley, Talaba II, Bacoor City, Cavite',
-    province: 'Cavite',
-    city: 'Bacoor City',
-    barangay: 'Talaba II',
-    street: '810 Main Alley',
-    contact: '+639123456789',
-  },
-];
-// Temporary service-area options for the prototype. The production list and
-// nearest-branch eligibility must come from the branch-scoped NestJS API.
-const ADDRESS_AREAS: Record<string, AddressArea> = {
-  'Metro Manila': {
-    cities: {
-      'Quezon City': ['San Roque', 'Bagumbayan', 'Batasan Hills', 'Commonwealth'],
-      'City of Manila': ['Ermita', 'Malate', 'Paco', 'Sampaloc'],
-      'Makati City': ['Bel-Air', 'Poblacion', 'San Antonio', 'San Lorenzo'],
-      'Pasig City': ['Kapitolyo', 'Ortigas Center', 'Pinagbuhatan', 'Santolan'],
-    },
-  },
-  Cavite: {
-    cities: {
-      'Bacoor City': ['Alima', 'Habay I', 'Molino III', 'Talaba II'],
-      'Dasmariñas City': ['Burol', 'Paliparan I', 'Salawag', 'Sampaloc I'],
-      'Imus City': ['Alapan I-A', 'Bucandala I', 'Malagasang I-A', 'Tanzang Luma I'],
-    },
-  },
-  Rizal: {
-    cities: {
-      Antipolo: ['Cupang', 'Dalig', 'Mayamot', 'San Roque'],
-      Cainta: ['San Andres', 'San Isidro', 'San Juan', 'Santo Domingo'],
-      Taytay: ['Dolores', 'Muzon', 'San Isidro', 'Santa Ana'],
-    },
-  },
-};
-
 function cleanAddressPart(value: string | null | undefined) {
   return value?.trim().replace(/\s+/g, ' ') ?? '';
 }
@@ -146,63 +93,20 @@ function matchAddressOption(candidate: string, options: string[]) {
     ?? '';
 }
 
-function addResolvedAddressArea(
-  current: Record<string, AddressArea>,
-  province: string,
-  city: string,
-  barangay: string,
-) {
-  if (!province) return current;
-
-  const currentArea = current[province] ?? { cities: {} };
-  if (!city) {
-    return current[province] ? current : { ...current, [province]: currentArea };
+function findAreaAndCity(candidates: string[], areas: Record<string, PhAddressArea>) {
+  for (const candidate of candidates.map(cleanAddressPart).filter(Boolean)) {
+    for (const [area, details] of Object.entries(areas)) {
+      const city = matchAddressOption(candidate, Object.keys(details.cities));
+      if (city) return { area, city };
+    }
   }
-
-  const currentBarangays = currentArea.cities[city] ?? [];
-  const hasBarangay = barangay
-    ? currentBarangays.some((option) => addressPartKey(option) === addressPartKey(barangay))
-    : true;
-  const nextBarangays = hasBarangay ? currentBarangays : [...currentBarangays, barangay];
-
-  if (current[province] && currentArea.cities[city] && nextBarangays === currentBarangays) {
-    return current;
-  }
-
-  return {
-    ...current,
-    [province]: {
-      cities: {
-        ...currentArea.cities,
-        [city]: nextBarangays,
-      },
-    },
-  };
+  return null;
 }
 
 const DEFAULT_ADDRESS_CENTER: Coordinate = {
   latitude: 14.6507,
   longitude: 121.0489,
 };
-// Presentation fixtures only. Replace these with eligible, distance-ranked
-// branches from the NestJS API; the mobile client must not calculate or trust
-// branch assignment on its own.
-const BRANCHES = [
-  {
-    id: 'cubao',
-    name: 'Superkalan Gaz - Cubao',
-    distance: '2.3 km away',
-    hours: 'Open until 8:00 PM',
-    nearest: true,
-  },
-  {
-    id: 'kamuning',
-    name: 'Superkalan Gaz - Kamuning',
-    distance: '4.8 km away',
-    hours: 'Open until 7:00 PM',
-    nearest: false,
-  },
-];
 const STEP_LABELS = ['Order Confirmed', 'Preparing', 'Out for Delivery', 'Delivered'];
 const CALENDAR_WEEKDAYS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
 const CALENDAR_MONTHS = [
@@ -248,9 +152,30 @@ function formatScheduleDate(date: Date) {
   return `${CALENDAR_MONTHS[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()}`;
 }
 
+function metadataText(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
 export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainScreen, opts?: { tab?: MainTab }) => void }) {
   const insets = useSafeAreaInsets();
+  const { session } = useAuth();
   const { prices, loading: pricesLoading, error: pricesError, refresh: refreshPrices } = usePricing();
+  const profileAddress = metadataText(session?.user.user_metadata?.address);
+  const profileContact = metadataText(session?.user.user_metadata?.contact_number)
+    || session?.user.phone
+    || '';
+  const initialAddress: SavedAddress | null = profileAddress
+    ? {
+        id: `profile-${session?.user.id ?? 'customer'}`,
+        label: 'Home',
+        address: profileAddress,
+        province: '',
+        city: '',
+        barangay: '',
+        street: profileAddress,
+        contact: normalizePhMobile(profileContact) ?? '',
+      }
+    : null;
   const products = useMemo(
     () => PRODUCT_DETAILS.flatMap((product) => {
       const price = prices[product.id];
@@ -261,10 +186,13 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
   const [step, setStep] = useState<Step>('location');
   const [modal, setModal] = useState<ModalKind>('none');
   const [quantities, setQuantities] = useState<Record<string, number>>({});
-  const [savedAddresses, setSavedAddresses] = useState(ADDRESSES);
-  const [addressAreas, setAddressAreas] = useState<Record<string, AddressArea>>(ADDRESS_AREAS);
-  const [address, setAddress] = useState(ADDRESSES[0]);
-  const [selectedBranch, setSelectedBranch] = useState(BRANCHES[0]);
+  const [savedAddresses, setSavedAddresses] = useState<SavedAddress[]>(() => initialAddress ? [initialAddress] : []);
+  const addressAreas = PH_ADDRESS_AREAS;
+  const [address, setAddress] = useState<SavedAddress | null>(initialAddress);
+  // Nearby branches must come from a customer-authorized NestJS endpoint. Keep
+  // this empty instead of presenting invented branch names or distances.
+  const [branches] = useState<BranchOption[]>([]);
+  const [selectedBranch, setSelectedBranch] = useState<BranchOption | null>(null);
   const [payment, setPayment] = useState<Payment>('gcash');
   const [tempPayment, setTempPayment] = useState<Payment>('gcash');
   const [delivered, setDelivered] = useState(false);
@@ -291,6 +219,7 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
   const [eaPhoneError, setEaPhoneError] = useState('');
   const [editingAddressId, setEditingAddressId] = useState<string | null>(null);
   const [addressSelectField, setAddressSelectField] = useState<AddressSelectField | null>(null);
+  const [addressOptionQuery, setAddressOptionQuery] = useState('');
   const [addressPin, setAddressPin] = useState<Coordinate>(DEFAULT_ADDRESS_CENTER);
   const [addressMapCenter, setAddressMapCenter] = useState<Coordinate>(DEFAULT_ADDRESS_CENTER);
   const [locationLoading, setLocationLoading] = useState(false);
@@ -321,6 +250,7 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
   const canViewPreviousMonth = visibleScheduleMonth.getTime() > minimumScheduleMonth.getTime();
   const canContinueFromSchedule = deliverySchedule === 'now'
     || (deliverySchedule === 'later' && Boolean(scheduledLabel));
+  const canContinueFromLocation = Boolean(address && selectedBranch);
 
   const changeProductQuantity = (productId: string, amount: number) => {
     setQuantities((current) => ({
@@ -359,26 +289,30 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
       const regionKey = addressPartKey(rawRegion);
       const provinceCandidate = ['national capital region', 'ncr', 'metropolitan manila', 'metro manila']
         .includes(regionKey)
-        ? 'Metro Manila'
+        ? 'National Capital Region (NCR)'
         : rawRegion;
-      const province = matchAddressOption(provinceCandidate, Object.keys(addressAreas))
-        || provinceCandidate;
-
-      const rawCity = cleanAddressPart(geocoded.city)
-        || (addressPartKey(cleanAddressPart(geocoded.subregion)) !== addressPartKey(province)
-          ? cleanAddressPart(geocoded.subregion)
-          : '');
-      const cityOptions = Object.keys(addressAreas[province]?.cities ?? {});
-      const city = matchAddressOption(rawCity, cityOptions) || rawCity;
-
       const subregion = cleanAddressPart(geocoded.subregion);
+      const rawCity = cleanAddressPart(geocoded.city)
+        || (addressPartKey(subregion) !== addressPartKey(provinceCandidate) ? subregion : '');
+      const inferredLocation = findAreaAndCity(
+        [rawCity, subregion, cleanAddressPart(geocoded.district)],
+        addressAreas,
+      );
+      const province = matchAddressOption(provinceCandidate, Object.keys(addressAreas))
+        || inferredLocation?.area
+        || '';
+      const cityOptions = Object.keys(addressAreas[province]?.cities ?? {});
+      const city = matchAddressOption(rawCity, cityOptions)
+        || (inferredLocation?.area === province ? inferredLocation.city : '')
+        || '';
+
       const rawBarangay = cleanAddressPart(geocoded.district)
         || (subregion
           && ![province, city].some((part) => part && addressPartKey(part) === addressPartKey(subregion))
           ? subregion
           : '');
       const barangayOptions = addressAreas[province]?.cities[city] ?? [];
-      const barangay = matchAddressOption(rawBarangay, [...barangayOptions]) || rawBarangay;
+      const barangay = matchAddressOption(rawBarangay, [...barangayOptions]);
 
       const formattedStreet = cleanAddressPart(geocoded.formattedAddress).split(',')[0] ?? '';
       const explicitStreet = [cleanAddressPart(geocoded.streetNumber), cleanAddressPart(geocoded.street)]
@@ -399,12 +333,6 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
       setEaBarangay(barangay);
       if (street) setEaStreet(street);
       if (landmark) setEaLandmark(landmark);
-      setAddressAreas((currentAreas) => addResolvedAddressArea(
-        currentAreas,
-        province,
-        city,
-        barangay,
-      ));
 
       const missingDetails = [
         !province ? 'province' : '',
@@ -423,16 +351,20 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
   };
 
   const openAddressEditor = (existing?: SavedAddress) => {
+    const inferredLocation = existing && (!existing.province || !existing.city)
+      ? findAreaAndCity(existing.address.split(',').reverse(), addressAreas)
+      : null;
     setEditingAddressId(existing?.id ?? null);
     setEaLabel(existing?.label ?? 'Home');
-    setEaProvince(existing?.province ?? '');
-    setEaCity(existing?.city ?? '');
+    setEaProvince(existing?.province || inferredLocation?.area || '');
+    setEaCity(existing?.city || inferredLocation?.city || '');
     setEaBarangay(existing?.barangay ?? '');
     setEaStreet(existing?.street ?? '');
     setEaLandmark(existing?.landmark ?? '');
     setEaContact(existing?.contact.slice(3) ?? '');
     setEaPhoneError('');
     setAddressSelectField(null);
+    setAddressOptionQuery('');
 
     if (existing?.coordinate) {
       setAddressPin(existing.coordinate);
@@ -456,19 +388,35 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
     : addressSelectField === 'city'
       ? Object.keys(addressAreas[eaProvince]?.cities ?? {})
       : addressAreas[eaProvince]?.cities[eaCity] ?? [];
+  const normalizedAddressQuery = addressPartKey(addressOptionQuery);
+  const filteredAddressSelectOptions = normalizedAddressQuery
+    ? addressSelectOptions.filter((option) => addressPartKey(option).includes(normalizedAddressQuery))
+    : addressSelectOptions;
+
+  const openAddressPicker = (field: AddressSelectField) => {
+    if (field === 'city' && !eaProvince) return;
+    if (field === 'barangay' && !eaCity) return;
+    setAddressOptionQuery('');
+    setAddressSelectField(field);
+  };
+
+  const closeAddressPicker = () => {
+    setAddressOptionQuery('');
+    setAddressSelectField(null);
+  };
 
   const selectAddressOption = (value: string) => {
     if (addressSelectField === 'province') {
-      const nextCity = Object.keys(addressAreas[value]?.cities ?? {})[0] ?? '';
       setEaProvince(value);
-      setEaCity(nextCity);
-      setEaBarangay(addressAreas[value]?.cities[nextCity]?.[0] ?? '');
+      setEaCity('');
+      setEaBarangay('');
     } else if (addressSelectField === 'city') {
       setEaCity(value);
-      setEaBarangay(addressAreas[eaProvince]?.cities[value]?.[0] ?? '');
+      setEaBarangay('');
     } else if (addressSelectField === 'barangay') {
       setEaBarangay(value);
     }
+    setAddressOptionQuery('');
     setAddressSelectField(null);
   };
 
@@ -584,23 +532,33 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
         <Text style={styles.locationSubtitle}>Choose your address and nearest branch.</Text>
 
         <Text style={styles.locationSectionLabel}>DELIVERY ADDRESS</Text>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`Selected delivery address: ${address.label}, ${address.address}`}
-          accessibilityHint="Opens your saved addresses"
-          onPress={() => setModal('selectAddress')}
-          style={({ pressed }) => [styles.locationAddressCard, pressed ? styles.controlPressed : null]}
-        >
-          <View style={styles.locationIconWrap}>
-            <Feather name="map-pin" size={24} color={colors.heading} />
+        {address ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Selected delivery address: ${address.label}, ${address.address}`}
+            accessibilityHint="Opens your saved addresses"
+            onPress={() => setModal('selectAddress')}
+            style={({ pressed }) => [styles.locationAddressCard, pressed ? styles.controlPressed : null]}
+          >
+            <View style={styles.locationIconWrap}>
+              <Feather name="map-pin" size={24} color={colors.heading} />
+            </View>
+            <View style={styles.locationAddressCopy}>
+              <Text style={styles.locationAddressLabel}>{address.label}</Text>
+              <Text style={styles.locationAddressText}>{address.address}</Text>
+            </View>
+            <Feather name="check-circle" size={22} color={colors.primary} />
+            <Feather name="chevron-right" size={22} color={colors.heading} />
+          </Pressable>
+        ) : (
+          <View style={styles.locationEmptyCard}>
+            <Feather name="map-pin" size={24} color={colors.muted} />
+            <View style={styles.locationAddressCopy}>
+              <Text style={styles.locationEmptyTitle}>No delivery address saved</Text>
+              <Text style={styles.locationEmptyText}>Add an address to continue with your order.</Text>
+            </View>
           </View>
-          <View style={styles.locationAddressCopy}>
-            <Text style={styles.locationAddressLabel}>{address.label}</Text>
-            <Text style={styles.locationAddressText}>{address.address}</Text>
-          </View>
-          <Feather name="check-circle" size={22} color={colors.primary} />
-          <Feather name="chevron-right" size={22} color={colors.heading} />
-        </Pressable>
+        )}
 
         <Pressable
           accessibilityRole="button"
@@ -608,13 +566,13 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
           style={({ pressed }) => [styles.addAddressButton, pressed ? styles.controlPressed : null]}
         >
           <Feather name="plus" size={20} color={colors.primary} />
-          <Text style={styles.addAddressText}>Add another address</Text>
+          <Text style={styles.addAddressText}>{address ? 'Add another address' : 'Add delivery address'}</Text>
         </Pressable>
 
         <View style={styles.locationDivider} />
         <Text style={styles.locationSectionLabel}>SELECT A BRANCH</Text>
-        {BRANCHES.map((branch) => {
-          const selected = selectedBranch.id === branch.id;
+        {branches.map((branch) => {
+          const selected = selectedBranch?.id === branch.id;
           return (
             <Pressable
               key={branch.id}
@@ -654,11 +612,26 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
             </Pressable>
           );
         })}
+        {branches.length === 0 ? (
+          <View style={styles.locationEmptyCard}>
+            <Feather name="home" size={24} color={colors.muted} />
+            <View style={styles.locationAddressCopy}>
+              <Text style={styles.locationEmptyTitle}>No nearby branches available</Text>
+              <Text style={styles.locationEmptyText}>Branch availability will appear here once it is provided by the service.</Text>
+            </View>
+          </View>
+        ) : null}
       </ScrollView>
 
       <View style={[styles.locationFooter, { paddingBottom: Math.max(insets.bottom, 16) }]}>
-        <PrimaryButton label="Choose cylinders" onPress={() => setStep('select')} />
-        <Text style={styles.locationReassurance}>You can change this before checkout.</Text>
+        <PrimaryButton
+          label="Choose cylinders"
+          disabled={!canContinueFromLocation}
+          onPress={() => setStep('select')}
+        />
+        <Text style={styles.locationReassurance}>
+          {canContinueFromLocation ? 'You can change this before checkout.' : 'Select an address and an available branch to continue.'}
+        </Text>
       </View>
     </View>
   );
@@ -899,8 +872,8 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
 
       <Text style={styles.sumSection}>Delivery Details</Text>
       {summaryRow('Name:', 'Juan Dela Cruz')}
-      {summaryRow('Address:', address.address)}
-      {summaryRow('Branch:', selectedBranch.name)}
+      {summaryRow('Address:', address?.address ?? 'Not selected')}
+      {summaryRow('Branch:', selectedBranch?.name ?? 'Not selected')}
       <Pressable style={{ alignSelf: 'flex-end' }} onPress={() => setStep('location')}>
         <Text style={styles.miniLink}>Change delivery details</Text>
       </Pressable>
@@ -963,7 +936,7 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
           <View style={styles.orderPill}><Text style={styles.orderPillText}>ORDER# 12345</Text></View>
         </View>
         <Text style={styles.etaBig}>{estimatedEtaLabel}</Text>
-        <Text style={styles.trackStatus}>{selectedBranch.name} is preparing your order.</Text>
+        <Text style={styles.trackStatus}>{selectedBranch?.name ?? 'Your selected branch'} is preparing your order.</Text>
         <View style={{ marginBottom: 12 }}>{stepper(2)}</View>
         <Text style={styles.trackNotify}>We'll notify you if your order is out for delivery.</Text>
         <View style={styles.riderRow}>
@@ -1034,8 +1007,11 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
               <Text style={styles.dialogTitle}>Select Address</Text>
               <Pressable onPress={() => setModal('none')} hitSlop={8}><Feather name="x" size={20} color={colors.cardBorder} /></Pressable>
             </View>
+            {savedAddresses.length === 0 ? (
+              <Text style={styles.metaText}>You do not have a saved delivery address yet.</Text>
+            ) : null}
             {savedAddresses.map((a) => {
-              const sel = address.id === a.id;
+              const sel = address?.id === a.id;
               return (
                 <View key={a.id} style={styles.addrRow}>
                   <Pressable style={styles.addrLeft} onPress={() => { setAddress(a); setModal('none'); }}>
@@ -1138,17 +1114,18 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
 
               <View style={styles.addressFormRow}>
                 <View style={styles.addressFormColumn}>
-                  <Text style={styles.addressFieldLabel}>Province / HUC</Text>
+                  <Text style={styles.addressFieldLabel}>Province / HUC / NCR</Text>
                   <Pressable
                     accessibilityRole="button"
-                    onPress={() => setAddressSelectField('province')}
+                    accessibilityLabel="Select province, highly urbanized city, or NCR"
+                    onPress={() => openAddressPicker('province')}
                     style={styles.addressSelect}
                   >
                     <Text
                       style={[styles.addressSelectText, !eaProvince ? styles.addressSelectPlaceholder : null]}
                       numberOfLines={1}
                     >
-                      {eaProvince || 'Select province'}
+                      {eaProvince || 'Select area'}
                     </Text>
                     <Feather name="chevron-down" size={18} color={colors.gray} />
                   </Pressable>
@@ -1157,8 +1134,10 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
                   <Text style={styles.addressFieldLabel}>City / Municipality</Text>
                   <Pressable
                     accessibilityRole="button"
-                    onPress={() => setAddressSelectField('city')}
-                    style={styles.addressSelect}
+                    accessibilityState={{ disabled: !eaProvince }}
+                    disabled={!eaProvince}
+                    onPress={() => openAddressPicker('city')}
+                    style={[styles.addressSelect, !eaProvince ? styles.addressSelectDisabled : null]}
                   >
                     <Text
                       style={[styles.addressSelectText, !eaCity ? styles.addressSelectPlaceholder : null]}
@@ -1176,8 +1155,10 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
                   <Text style={styles.addressFieldLabel}>Barangay</Text>
                   <Pressable
                     accessibilityRole="button"
-                    onPress={() => setAddressSelectField('barangay')}
-                    style={styles.addressSelect}
+                    accessibilityState={{ disabled: !eaCity }}
+                    disabled={!eaCity}
+                    onPress={() => openAddressPicker('barangay')}
+                    style={[styles.addressSelect, !eaCity ? styles.addressSelectDisabled : null]}
                   >
                     <Text
                       style={[styles.addressSelectText, !eaBarangay ? styles.addressSelectPlaceholder : null]}
@@ -1220,7 +1201,7 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
 
           {addressSelectField ? (
             <View style={styles.addressPickerLayer}>
-              <Pressable style={StyleSheet.absoluteFill} onPress={() => setAddressSelectField(null)} />
+              <Pressable style={StyleSheet.absoluteFill} onPress={closeAddressPicker} />
               <View style={styles.addressPickerCard}>
                 <View style={styles.addressPickerHead}>
                   <Text style={styles.addressPickerTitle}>
@@ -1230,14 +1211,33 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
                         ? 'Select City / Municipality'
                         : 'Select Barangay'}
                   </Text>
-                  <Pressable onPress={() => setAddressSelectField(null)} hitSlop={8}>
+                  <Pressable onPress={closeAddressPicker} hitSlop={8}>
                     <Feather name="x" size={20} color={colors.gray} />
                   </Pressable>
                 </View>
-                <ScrollView style={styles.addressPickerList}>
-                  {addressSelectOptions.map((option) => (
+                <View style={styles.addressPickerSearchRow}>
+                  <Feather name="search" size={17} color={colors.muted} />
+                  <TextInput
+                    autoCorrect={false}
+                    clearButtonMode="while-editing"
+                    value={addressOptionQuery}
+                    onChangeText={setAddressOptionQuery}
+                    placeholder={`Search ${addressSelectField === 'barangay' ? 'barangay' : 'location'}`}
+                    placeholderTextColor={colors.muted}
+                    style={styles.addressPickerSearchInput}
+                  />
+                </View>
+                <FlatList
+                  data={filteredAddressSelectOptions}
+                  keyExtractor={(option) => option}
+                  keyboardShouldPersistTaps="handled"
+                  initialNumToRender={20}
+                  style={styles.addressPickerList}
+                  ListEmptyComponent={(
+                    <Text style={styles.addressPickerEmpty}>No matching Philippine location found.</Text>
+                  )}
+                  renderItem={({ item: option }) => (
                     <Pressable
-                      key={option}
                       accessibilityRole="button"
                       onPress={() => selectAddressOption(option)}
                       style={styles.addressPickerOption}
@@ -1249,8 +1249,9 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
                         ? <Feather name="check" size={18} color={colors.primary} />
                         : null}
                     </Pressable>
-                  ))}
-                </ScrollView>
+                  )}
+                />
+                <Text style={styles.addressPickerSource}>{PH_LOCATION_DATA_VERSION} • Philippine Statistics Authority</Text>
               </View>
             </View>
           ) : null}
@@ -1390,7 +1391,7 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
             <View style={styles.confirmCircle}><Feather name="check" size={56} color="#fff" /></View>
             <Text style={styles.confirmTitle}>Order Confirmed!</Text>
             <Text style={styles.confirmBody}>
-              Order# 12345 is confirmed at 11:30 AM{'\n'}Branch: {selectedBranch.name}{'\n'}Contact Number: 09171234567
+              Order# 12345 is confirmed at 11:30 AM{'\n'}Branch: {selectedBranch?.name ?? 'Not selected'}{'\n'}Contact Number: 09171234567
               {deliverySchedule === 'later' && scheduledLabel
                 ? `\nScheduled Delivery: ${scheduledLabel}`
                 : `\nEstimated Delivery: ${estimatedEtaLabel}`}
@@ -1483,6 +1484,21 @@ const styles = StyleSheet.create({
   locationAddressCopy: { flex: 1 },
   locationAddressLabel: { fontFamily: fonts.semibold, fontSize: 16, color: colors.heading, marginBottom: 2 },
   locationAddressText: { fontFamily: fonts.regular, fontSize: 12, lineHeight: 18, color: colors.grayText },
+  locationEmptyCard: {
+    minHeight: 86,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: colors.cardBorder,
+    borderRadius: radii.card,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: colors.surfaceMuted,
+  },
+  locationEmptyTitle: { fontFamily: fonts.semibold, fontSize: 14, color: colors.heading, marginBottom: 2 },
+  locationEmptyText: { fontFamily: fonts.regular, fontSize: 11, lineHeight: 17, color: colors.grayText },
   addAddressButton: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: 8, alignSelf: 'flex-start', marginTop: 10 },
   addAddressText: { fontFamily: fonts.medium, fontSize: 13, color: colors.primary },
   locationDivider: { height: 1, backgroundColor: colors.border, marginTop: 14 },
@@ -1730,6 +1746,7 @@ const styles = StyleSheet.create({
     gap: 4,
     backgroundColor: colors.surface,
   },
+  addressSelectDisabled: { opacity: 0.5, backgroundColor: colors.surfaceMuted },
   addressSelectText: { flex: 1, fontFamily: fonts.regular, fontSize: 11, color: colors.grayText },
   addressSelectPlaceholder: { color: colors.muted },
   addressPrivacyRow: { minHeight: 42, flexDirection: 'row', alignItems: 'center', gap: 8 },
@@ -1737,18 +1754,33 @@ const styles = StyleSheet.create({
   addressSaveButton: { marginTop: 2 },
   addressPickerLayer: {
     ...StyleSheet.absoluteFillObject,
-    zIndex: 10,
+    zIndex: 30,
+    elevation: 30,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 28,
     backgroundColor: 'rgba(24,36,46,0.34)',
   },
-  addressPickerCard: { width: '100%', maxWidth: 350, maxHeight: '58%', borderRadius: radii.card, backgroundColor: colors.surface, padding: 16, ...cardShadow },
+  addressPickerCard: { width: '100%', maxWidth: 350, height: '62%', maxHeight: 520, borderRadius: radii.card, backgroundColor: colors.surface, padding: 16, ...cardShadow },
   addressPickerHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
   addressPickerTitle: { flex: 1, fontFamily: fonts.semibold, fontSize: 15, color: colors.heading },
-  addressPickerList: { flexGrow: 0 },
+  addressPickerSearchRow: {
+    height: 42,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+    borderRadius: radii.button,
+    paddingHorizontal: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 6,
+  },
+  addressPickerSearchInput: { flex: 1, height: '100%', fontFamily: fonts.regular, fontSize: 12, color: colors.heading },
+  addressPickerList: { flex: 1, minHeight: 46 },
   addressPickerOption: { minHeight: 46, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: 1, borderBottomColor: colors.border },
   addressPickerOptionText: { flex: 1, fontFamily: fonts.regular, fontSize: 13, color: colors.grayText },
+  addressPickerEmpty: { paddingVertical: 24, textAlign: 'center', fontFamily: fonts.regular, fontSize: 12, color: colors.grayText },
+  addressPickerSource: { paddingTop: 8, fontFamily: fonts.regular, fontSize: 9, color: colors.muted, textAlign: 'center' },
 
   scheduleDialog: { maxWidth: 380 },
   calendarBox: { backgroundColor: colors.redeemPale, borderRadius: 8, padding: 12, marginBottom: 12 },
