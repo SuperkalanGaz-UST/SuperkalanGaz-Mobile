@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Image,
   type LayoutChangeEvent,
@@ -17,6 +17,7 @@ import { formatPeso, usePricing } from '@/contexts/PricingContext';
 import { colors } from '@/theme/colors';
 import { fonts } from '@/theme/fonts';
 import { cylinderFor } from '@/lib/assets';
+import { apiFetch } from '@/lib/api';
 import { AppHeader } from '@/components/ui/AppHeader';
 import { BottomNav } from '@/components/ui/BottomNav';
 import { AppRefreshControl } from '@/components/ui/AppRefreshControl';
@@ -64,6 +65,36 @@ export function HomeScreen({
     { size: '11 KG', price: priceLabel('11kg') },
     { size: '2.7 KG', price: priceLabel('2.7kg') },
   ];
+
+  // Fetch real active order from the API
+  type ActiveOrderRow = {
+    id: string;
+    status: string;
+    cylinder_size: string;
+    quantity: number;
+  };
+  const [activeOrder, setActiveOrder] = useState<ActiveOrderRow | null>(null);
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const res = await apiFetch(`/service-requests/me?_t=${Date.now()}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        const orders: ActiveOrderRow[] = data.serviceRequests ?? [];
+        const active = orders.find(
+          (o) => o.status === 'Pending' || o.status === 'Dispatched' || o.status === 'En Route',
+        );
+        setActiveOrder(active ?? null);
+      } catch {
+        // ignore
+      }
+    };
+    void load();
+    // Poll every 10s so the card updates in near-real-time
+    const interval = setInterval(load, 10_000);
+    return () => clearInterval(interval);
+  }, []);
 
   const [activeTab, setActiveTab] = useState<MainTab>(initialTab);
   const [rewardsSub, setRewardsSub] = useState<'my' | 'all'>('my');
@@ -304,43 +335,56 @@ export function HomeScreen({
             </Svg>
           </View>
 
-          {/* Active order */}
+          {/* Active order — only shown when a real in-flight order exists */}
           <View style={styles.content}>
-            <View style={styles.section} onLayout={captureY('active')}>
-              <Text style={styles.sectionTitle}>Active order</Text>
-              <Pressable
-                ref={activeRef}
-                style={styles.activeOrder}
-                onPress={() => onNavigate('orders', { tab: 'orders' })}
-              >
-                <View style={styles.activeTopRow}>
-                  <View style={styles.activeProduct}>
-                    <Image
-                      source={cylinderFor('11 KG')}
-                      style={styles.activeCylinder}
-                      resizeMode="contain"
-                    />
-                    <Text style={styles.activeProductText}>11 KG × 2</Text>
-                  </View>
-                  <Text style={styles.activeStatus}>Out for delivery</Text>
+            {activeOrder ? (
+              <>
+                <View style={styles.section} onLayout={captureY('active')}>
+                  <Text style={styles.sectionTitle}>Active order</Text>
+                  <Pressable
+                    ref={activeRef}
+                    style={styles.activeOrder}
+                    onPress={() => onNavigate('orders', { tab: 'orders' })}
+                  >
+                    <View style={styles.activeTopRow}>
+                      <View style={styles.activeProduct}>
+                        <Image
+                          source={cylinderFor(activeOrder.cylinder_size)}
+                          style={styles.activeCylinder}
+                          resizeMode="contain"
+                        />
+                        <Text style={styles.activeProductText}>{activeOrder.cylinder_size.toUpperCase()} × {activeOrder.quantity}</Text>
+                      </View>
+                      <Text style={styles.activeStatus}>
+                        {activeOrder.status === 'En Route' ? 'Out for delivery'
+                          : activeOrder.status === 'Dispatched' ? 'Preparing'
+                          : 'Order Confirmed'}
+                      </Text>
+                    </View>
+
+                    <View style={styles.timeline}>
+                      <View style={styles.timelineBase} />
+                      <View style={[
+                        styles.timelineDone,
+                        { width: activeOrder.status === 'En Route' ? '66%'
+                          : activeOrder.status === 'Dispatched' ? '33%'
+                          : '5%' },
+                      ]} />
+                      <View style={[styles.timelineDot, styles.timelineDotStart]} />
+                      <View style={[styles.timelineDot, styles.timelineDotMiddle]} />
+                      <View style={[styles.timelineDot, styles.timelineDotEnd]} />
+                    </View>
+                    <View style={styles.timelineLabels}>
+                      <Text style={styles.timelineLabel}>Confirmed</Text>
+                      <Text style={styles.timelineLabel}>On the way</Text>
+                      <Text style={[styles.timelineLabel, activeOrder.status !== 'En Route' && styles.timelineLabelMuted]}>Delivered</Text>
+                    </View>
+                  </Pressable>
                 </View>
 
-                <View style={styles.timeline}>
-                  <View style={styles.timelineBase} />
-                  <View style={styles.timelineDone} />
-                  <View style={[styles.timelineDot, styles.timelineDotStart]} />
-                  <View style={[styles.timelineDot, styles.timelineDotMiddle]} />
-                  <View style={[styles.timelineDot, styles.timelineDotEnd]} />
-                </View>
-                <View style={styles.timelineLabels}>
-                  <Text style={styles.timelineLabel}>Confirmed</Text>
-                  <Text style={styles.timelineLabel}>On the way</Text>
-                  <Text style={[styles.timelineLabel, styles.timelineLabelMuted]}>Delivered</Text>
-                </View>
-              </Pressable>
-            </View>
-
-            <View style={styles.divider} />
+                <View style={styles.divider} />
+              </>
+            ) : null}
 
             {/* Order again */}
             <View

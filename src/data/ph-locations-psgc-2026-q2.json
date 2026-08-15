@@ -1,0 +1,38 @@
+{
+  "version": "PSGC 2026 Q2",
+  "source": "Philippine Statistics Authority",
+  "areas": {
+    "NCR": {
+      "cities": {
+        "Caloocan City": ["Barangay 1", "Barangay 2", "Barangay 3"],
+        "Quezon City": ["Bago Bantay", "Commonwealth", "Diliman", "Holy Spirit"]
+      }
+    },
+    "Region III": {
+      "cities": {
+        "San Jose del Monte City": ["Tungkong Mangga", "Sto. Cristo", "San Manuel"],
+        "Meycauayan City": ["Poblacion", "Saluysoy", "Ubihan"],
+        "Mabalacat City": ["Dapdap", "Dolores", "Sapang Balen"]
+      }
+    },
+    "Region IV-A": {
+      "cities": {
+        "Cavite City": ["Barangay 1", "Barangay 2", "Barangay 3"],
+        "Dasmarinas City": ["Burol", "Paliparan", "Salawag"],
+        "Calamba City": ["Bucal", "Pansol", "Canlubang"]
+      }
+    },
+    "Region II": {
+      "cities": {
+        "Tuguegarao City": ["Buntun", "Caritan Norte", "Caritan Sur"],
+        "Santiago City": ["Dubinan East", "Dubinan West", "Rizal"]
+      }
+    },
+    "Region VI": {
+      "cities": {
+        "Iloilo City": ["Jaro", "Mandurriao", "Molo"],
+        "Bacolod City": ["Alijis", "Bata", "Mandalagan"]
+      }
+    }
+  }
+}

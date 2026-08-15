@@ -1,7 +1,8 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, FlatList, Image, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors } from '@/theme/colors';
 import { fonts } from '@/theme/fonts';
@@ -11,6 +12,7 @@ import { PrimaryButton } from '@/components/ui/controls';
 import { Toast } from '@/components/ui/overlays';
 import { CylinderSize, formatPeso, usePricing } from '@/contexts/PricingContext';
 import { useAuth } from '@/contexts/AuthContext';
+import { apiErrorMessage, apiFetch } from '@/lib/api';
 import { normalizePhMobile } from '@/lib/phMobile';
 import { PH_ADDRESS_AREAS, PH_LOCATION_DATA_VERSION, type PhAddressArea } from '@/lib/phLocations';
 import type { MainScreen, MainTab } from '@/navigation/types';
@@ -58,6 +60,22 @@ type BranchOption = {
   nearest: boolean;
 };
 
+type OrderRow = {
+  id: string;
+  branch_id: string;
+  status: 'Pending' | 'Dispatched' | 'En Route' | 'Delivered' | 'Cancelled' | 'Under Review';
+  customer_name: string;
+  customer_contact: string;
+  delivery_address: string;
+  cylinder_size: string;
+  quantity: number;
+  special_instructions: string | null;
+  requested_at: string;
+  dispatched_at: string | null;
+  delivered_at: string | null;
+  rider_id?: string | null;
+};
+
 const PRODUCT_DETAILS: Array<{ id: CylinderSize; label: string; eta: string; use: string }> = [
   { id: '2.7kg', label: '2.7 KG', eta: '12:00 - 12:05 PM', use: 'Portable • Outdoor use' },
   { id: '5kg', label: '5 KG', eta: '12:00 - 12:10 PM', use: 'Compact • Small households' },
@@ -93,6 +111,47 @@ function matchAddressOption(candidate: string, options: string[]) {
     ?? '';
 }
 
+function normalizeBranchMatchText(value: string | null | undefined) {
+  return cleanAddressPart(value)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function trimAfterCavite(value: string) {
+  const match = value.match(/^(.*?\bCavite\b)/i);
+  return match ? match[1].trim() : value.trim();
+}
+
+function branchMatchesCustomerLocation(
+  branch: { name?: string | null; province: string | null; city: string | null; address: string | null },
+  location: SavedAddress | null,
+) {
+  if (!location) return true;
+
+  const locationValues = [location.province, location.city, location.barangay, location.street]
+    .map(normalizeBranchMatchText)
+    .filter(Boolean);
+  const branchValues = [branch.name, branch.province, branch.city, branch.address]
+    .map(normalizeBranchMatchText)
+    .filter(Boolean);
+
+  if (!locationValues.length || !branchValues.length) return true;
+
+  const matched = locationValues.some((candidate) => branchValues.some((branchValue) => {
+    if (!candidate || !branchValue) return false;
+    if (candidate === branchValue) return true;
+    if (branchValue.includes(candidate) || candidate.includes(branchValue)) return true;
+
+    const candidateWords = candidate.split(' ').filter((word) => word.length > 2);
+    return candidateWords.some((word) => branchValue.includes(word));
+  }));
+
+  return matched;
+}
+
 function findAreaAndCity(candidates: string[], areas: Record<string, PhAddressArea>) {
   for (const candidate of candidates.map(cleanAddressPart).filter(Boolean)) {
     for (const [area, details] of Object.entries(areas)) {
@@ -107,7 +166,7 @@ const DEFAULT_ADDRESS_CENTER: Coordinate = {
   latitude: 14.6507,
   longitude: 121.0489,
 };
-const STEP_LABELS = ['Order Confirmed', 'Preparing', 'Out for Delivery', 'Delivered'];
+const STEP_LABELS = ['Order\nConfirmed', 'Preparing', 'Out for Delivery', 'Delivered'];
 const CALENDAR_WEEKDAYS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
 const CALENDAR_MONTHS = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -160,11 +219,16 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
   const insets = useSafeAreaInsets();
   const { session } = useAuth();
   const { prices, loading: pricesLoading, error: pricesError, refresh: refreshPrices } = usePricing();
+  const customerName = [
+    metadataText(session?.user.user_metadata?.first_name),
+    metadataText(session?.user.user_metadata?.last_name),
+  ].filter(Boolean).join(' ').trim() || metadataText(session?.user.user_metadata?.display_name) || 'Customer';
   const profileAddress = metadataText(session?.user.user_metadata?.address);
   const profileContact = metadataText(session?.user.user_metadata?.contact_number)
     || session?.user.phone
     || '';
-  const initialAddress: SavedAddress | null = profileAddress
+  const customerContact = normalizePhMobile(profileContact) ?? profileContact;
+  const initialAddress: SavedAddress | null = useMemo(() => profileAddress
     ? {
         id: `profile-${session?.user.id ?? 'customer'}`,
         label: 'Home',
@@ -175,7 +239,7 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
         street: profileAddress,
         contact: normalizePhMobile(profileContact) ?? '',
       }
-    : null;
+    : null, [session?.user.id, profileAddress, profileContact]);
   const products = useMemo(
     () => PRODUCT_DETAILS.flatMap((product) => {
       const price = prices[product.id];
@@ -187,11 +251,43 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
   const [modal, setModal] = useState<ModalKind>('none');
   const [quantities, setQuantities] = useState<Record<string, number>>({});
   const [savedAddresses, setSavedAddresses] = useState<SavedAddress[]>(() => initialAddress ? [initialAddress] : []);
+  const [hasLoadedAddresses, setHasLoadedAddresses] = useState(false);
+  const initialAddressRef = useRef(initialAddress);
+  initialAddressRef.current = initialAddress;
+
+  useEffect(() => {
+    if (!session?.user?.id) return;
+    const load = async () => {
+      try {
+        const stored = await AsyncStorage.getItem(`savedAddresses_${session.user.id}`);
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            const existingIds = new Set(parsed.map((a: SavedAddress) => a.id));
+            if (initialAddressRef.current && !existingIds.has(initialAddressRef.current.id)) {
+              setSavedAddresses([initialAddressRef.current, ...parsed]);
+            } else {
+              setSavedAddresses(parsed);
+            }
+          }
+        }
+      } catch (e) {
+        // ignore
+      } finally {
+        setHasLoadedAddresses(true);
+      }
+    };
+    void load();
+  }, [session?.user?.id]);
+
+  useEffect(() => {
+    if (!session?.user?.id || !hasLoadedAddresses) return;
+    AsyncStorage.setItem(`savedAddresses_${session.user.id}`, JSON.stringify(savedAddresses)).catch(() => {});
+  }, [savedAddresses, session?.user?.id, hasLoadedAddresses]);
+
   const addressAreas = PH_ADDRESS_AREAS;
   const [address, setAddress] = useState<SavedAddress | null>(initialAddress);
-  // Nearby branches must come from a customer-authorized NestJS endpoint. Keep
-  // this empty instead of presenting invented branch names or distances.
-  const [branches] = useState<BranchOption[]>([]);
+  const [branches, setBranches] = useState<BranchOption[]>([]);
   const [selectedBranch, setSelectedBranch] = useState<BranchOption | null>(null);
   const [payment, setPayment] = useState<Payment>('gcash');
   const [tempPayment, setTempPayment] = useState<Payment>('gcash');
@@ -224,6 +320,95 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
   const [addressMapCenter, setAddressMapCenter] = useState<Coordinate>(DEFAULT_ADDRESS_CENTER);
   const [locationLoading, setLocationLoading] = useState(false);
   const [locationMessage, setLocationMessage] = useState('Move the pin or tap the map to adjust it.');
+  const [placingOrder, setPlacingOrder] = useState(false);
+  const [currentOrder, setCurrentOrder] = useState<OrderRow | null>(null);
+  const [orderPlacedAt, setOrderPlacedAt] = useState<Date | null>(null);
+  const [riderName, setRiderName] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (currentOrder?.rider_id) {
+      apiFetch(`/riders/${currentOrder.rider_id}`)
+        .then((res) => res.json())
+        .then((data) => {
+          if (data.rider?.name) setRiderName(data.rider.name);
+        })
+        .catch(() => {});
+    }
+  }, [currentOrder?.rider_id]);
+
+  useEffect(() => {
+    if (step !== 'track' || !currentOrder) return;
+    const poll = async () => {
+      try {
+        // Bust React Native's aggressive GET cache by appending a timestamp
+        const res = await apiFetch(`/service-requests/me?_t=${Date.now()}`, {
+          cache: 'no-store',
+          headers: {
+            'Cache-Control': 'no-cache',
+            Pragma: 'no-cache',
+          },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const updated = data.serviceRequests?.find((r: OrderRow) => r.id === currentOrder.id);
+          if (updated) setCurrentOrder(updated);
+        }
+      } catch (e) {
+        // ignore
+      }
+    };
+    // Fetch immediately on entering track, then poll every 2s
+    void poll();
+    const interval = setInterval(poll, 2000);
+    return () => clearInterval(interval);
+  }, [step, currentOrder?.id]);
+
+  const loadBranchesForAddress = async (nextAddress: SavedAddress | null) => {
+    try {
+      const res = await apiFetch('/branches/public');
+      const data = await res.json();
+
+      if (!res.ok) {
+        setBranches([]);
+        setSelectedBranch(null);
+        return;
+      }
+
+      const rows = Array.isArray(data.branches)
+        ? (data.branches as Array<{ id: string; name: string; province: string | null; city: string | null; address: string | null; }>)
+        : [];
+
+      const matchingRows = nextAddress
+        ? rows.filter((branch) => {
+            return branchMatchesCustomerLocation(branch, nextAddress);
+          })
+        : rows;
+
+      const nextBranches = matchingRows.map((branch, index) => ({
+        id: branch.id,
+        name: branch.name,
+        distance: branch.city || branch.province || branch.address || 'Nearby branch',
+        hours: branch.address ? branch.address : 'Open daily',
+        nearest: index === 0,
+      }));
+
+      setBranches(nextBranches);
+      setSelectedBranch((current) => {
+        if (nextBranches.length === 0) return null;
+        if (current && nextBranches.some((branch) => branch.id === current.id)) {
+          return current;
+        }
+        return nextBranches[0];
+      });
+    } catch {
+      setBranches([]);
+      setSelectedBranch(null);
+    }
+  };
+
+  useEffect(() => {
+    void loadBranchesForAddress(address);
+  }, [address]);
 
   const selectedProducts = products
     .map((selectedProduct) => ({
@@ -237,8 +422,17 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
   );
   const totalQty = selectedProducts.reduce((sum, item) => sum + item.quantity, 0);
   const typeCount = selectedProducts.length;
-  const estimatedEta = selectedProducts[selectedProducts.length - 1]?.product.eta;
-  const estimatedEtaLabel = estimatedEta ?? '—';
+
+  // ETA: anchored to the time the order was placed (or dispatched_at from backend).
+  // On summary screen (before placing), shows now+15..30.
+  // On track screen, uses the stored placement time so it never shifts.
+  const etaBase = step === 'track'
+    ? (currentOrder?.requested_at ? new Date(currentOrder.requested_at) : (orderPlacedAt ?? new Date()))
+    : new Date();
+  const minEta = new Date(etaBase.getTime() + 15 * 60000);
+  const maxEta = new Date(etaBase.getTime() + 30 * 60000);
+  const formatTime = (d: Date) => d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  const estimatedEtaLabel = `${formatTime(minEta)} – ${formatTime(maxEta)}`;
   const showToast = (m: string) => { setToast(m); setTimeout(() => setToast(''), 2500); };
   const headerTitle = step === 'track' ? 'Track my Order' : 'Request an Order';
   const scheduledLabel = scheduledDate && scheduledTime
@@ -454,6 +648,7 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
         : [...current, nextAddress];
     });
     setAddress(nextAddress);
+    void loadBranchesForAddress(nextAddress);
     setModal('none');
     showToast(editingAddressId ? 'Address updated.' : 'Address saved.');
   };
@@ -494,13 +689,30 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
         const border = isDone ? colors.greenBright : isActive ? '#8db5f6' : colors.stepIdle;
         return (
           <View key={label} style={[styles.stepCol, isLast ? { flex: 0 } : { flex: 1 }]}>
+            {/* Row 1: circle + connecting line */}
             <View style={styles.stepRow}>
               <View style={[styles.stepNode, { backgroundColor: bg, borderColor: border }]}>
                 {isDone ? <Feather name="check" size={16} color="#fff" /> : <View style={[styles.stepDot, { backgroundColor: isActive ? colors.primary : colors.stepIdle }]} />}
               </View>
               {!isLast && <View style={[styles.stepLine, { backgroundColor: isDone ? colors.greenBright : colors.stepIdle }]} />}
             </View>
-            <Text style={[styles.stepLabel, { color: isActive ? '#143263' : '#3a3e44' }]}>{label}</Text>
+            {/* Row 2: label anchored under the circle only */}
+            <View style={styles.stepLabelRow}>
+              <View style={styles.stepLabelAnchor}>
+                <Text
+                  numberOfLines={i === 0 ? 2 : 1}
+                  style={[
+                    styles.stepLabel,
+                    { color: isActive ? '#143263' : '#8a8f99' },
+                    i === 0 && { width: 92 },
+                    i !== 0 && { width: 112 }
+                  ]}
+                >
+                  {label}
+                </Text>
+              </View>
+              {!isLast && <View style={styles.stepLabelSpacer} />}
+            </View>
           </View>
         );
       })}
@@ -612,15 +824,18 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
             </Pressable>
           );
         })}
-        {branches.length === 0 ? (
-          <View style={styles.locationEmptyCard}>
-            <Feather name="home" size={24} color={colors.muted} />
-            <View style={styles.locationAddressCopy}>
-              <Text style={styles.locationEmptyTitle}>No nearby branches available</Text>
-              <Text style={styles.locationEmptyText}>Branch availability will appear here once it is provided by the service.</Text>
+        {(() => {
+          const shouldShowEmptyState = branches.length === 0;
+          return shouldShowEmptyState ? (
+            <View style={styles.locationEmptyCard}>
+              <Feather name="home" size={24} color={colors.muted} />
+              <View style={styles.locationAddressCopy}>
+                <Text style={styles.locationEmptyTitle}>No nearby branches available</Text>
+                <Text style={styles.locationEmptyText}>Branch availability will appear here once it is provided by the service.</Text>
+              </View>
             </View>
-          </View>
-        ) : null}
+          ) : null;
+        })()}
       </ScrollView>
 
       <View style={[styles.locationFooter, { paddingBottom: Math.max(insets.bottom, 16) }]}>
@@ -871,13 +1086,13 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
       <View style={styles.hair} />
 
       <Text style={styles.sumSection}>Delivery Details</Text>
-      {summaryRow('Name:', 'Juan Dela Cruz')}
+      {summaryRow('Name:', customerName)}
       {summaryRow('Address:', address?.address ?? 'Not selected')}
       {summaryRow('Branch:', selectedBranch?.name ?? 'Not selected')}
       <Pressable style={{ alignSelf: 'flex-end' }} onPress={() => setStep('location')}>
         <Text style={styles.miniLink}>Change delivery details</Text>
       </Pressable>
-      {summaryRow('Contact:', '09123456789')}
+      {summaryRow('Contact:', customerContact || 'Not provided')}
       <View style={styles.hair} />
 
       <Text style={styles.sumSection}>Payment Details</Text>
@@ -913,44 +1128,123 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
       {summaryRow('Loyalty Points:', '+50 pts', colors.greenBright)}
       <View style={styles.hair} />
 
-      <Pressable style={styles.cta} onPress={() => setModal('confirmed')}><Text style={styles.ctaText}>PLACE ORDER</Text></Pressable>
+      <Pressable
+        style={[styles.cta, placingOrder ? styles.ctaDisabled : null]}
+        disabled={placingOrder}
+        onPress={() => {
+          void (async () => {
+            const placedAt = new Date();
+            setOrderPlacedAt(placedAt);
+            if (!selectedBranch || !address || !selectedProducts[0] || !session?.user) {
+              showToast('Select a branch, address, and cylinder first.');
+              return;
+            }
+            if (!customerContact || normalizePhMobile(customerContact) === null) {
+              showToast('Missing a valid mobile number in your profile.');
+              return;
+            }
+            setPlacingOrder(true);
+            try {
+              const payload = {
+                branchId: selectedBranch.id,
+                customerName,
+                customerContact: normalizePhMobile(customerContact),
+                deliveryAddress: address.address,
+                cylinderSize: selectedProducts[0].product.id,
+                quantity: selectedProducts[0].quantity,
+              };
+              const res = await apiFetch('/service-requests/customer', {
+                method: 'POST',
+                body: JSON.stringify(payload),
+              });
+              const data = await res.json();
+              if (!res.ok) throw new Error(apiErrorMessage(data, 'Failed to create order'));
+              setCurrentOrder(data.serviceRequest as OrderRow);
+              setModal('confirmed');
+            } catch (err) {
+              showToast(err instanceof Error ? err.message : 'Failed to create order');
+            } finally {
+              setPlacingOrder(false);
+            }
+          })();
+        }}
+      >
+        <Text style={styles.ctaText}>{placingOrder ? 'PLACING…' : 'PLACE ORDER'}</Text>
+      </Pressable>
     </View>
   );
 
   const renderTrack = () => {
-    if (delivered) {
+    if (delivered || currentOrder?.status === 'Delivered') {
       return (
         <View style={{ paddingHorizontal: 24 }}>
           <View style={{ paddingVertical: 20 }}>{stepper(4)}</View>
           <Text style={styles.trackDone}>Delivery Complete!</Text>
-          {summaryRow('Order Number:', 'LPG-12345')}
-          {summaryRow('Time of Delivery:', '10:00 AM')}
-          {summaryRow('Driver:', 'Mario')}
+          {summaryRow('Order Number:', currentOrder?.id?.slice(0, 8).toUpperCase() ?? 'PENDING')}
+          {summaryRow('Time of Delivery:', currentOrder?.delivered_at ? new Date(currentOrder.delivered_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) : 'Just now')}
+          {summaryRow('Driver:', riderName || 'Assigned Driver')}
           <Pressable style={[styles.cta, { marginTop: 12 }]} onPress={() => setFeedback('rider')}><Text style={styles.ctaText}>SUBMIT FEEDBACK</Text></Pressable>
         </View>
       );
     }
+
+    // Pending → 1 (Order Confirmed immediately green, Preparing active)
+    // Dispatched/En Route → 3 (Out for Delivery checked, Delivered active)
+    // Backend dispatch is the customer-visible "out for delivery" milestone.
+    let stepIndex = 1;
+    if (currentOrder?.status === 'Dispatched' || currentOrder?.status === 'En Route') {
+      stepIndex = 3;
+    }
+
+    const isOutForDelivery = currentOrder?.status === 'Dispatched' || currentOrder?.status === 'En Route';
+    const isPending = currentOrder?.status === 'Pending';
+
+    // Build branch label: "Superkalan Gaz Amadeo, Cavite" — use name + city only
+    // distance holds city || province || full-address; take only the first comma-separated part
+    const cityPart = selectedBranch?.distance?.split(',')[0]?.trim() || '';
+    const branchName = selectedBranch?.name?.trim() || '';
+    const namePart = branchName.toLowerCase().includes('superkalan gaz')
+      ? branchName
+      : `Superkalan Gaz ${branchName}`.trim();
+    const branchLabel = trimAfterCavite([namePart, cityPart]
+      .filter(Boolean)
+      .join(', ') || 'Superkalan Gaz branch');
+
     return (
       <View style={{ paddingHorizontal: 24 }}>
         <View style={styles.orderPillWrap}>
-          <View style={styles.orderPill}><Text style={styles.orderPillText}>ORDER# 12345</Text></View>
+          <View style={styles.orderPill}><Text style={styles.orderPillText}>ORDER# {currentOrder?.id?.slice(0, 8).toUpperCase() ?? 'PENDING'}</Text></View>
         </View>
         <Text style={styles.etaBig}>{estimatedEtaLabel}</Text>
-        <Text style={styles.trackStatus}>{selectedBranch?.name ?? 'Your selected branch'} is preparing your order.</Text>
-        <View style={{ marginBottom: 12 }}>{stepper(2)}</View>
-        <Text style={styles.trackNotify}>We'll notify you if your order is out for delivery.</Text>
-        <View style={styles.riderRow}>
-          <View style={styles.riderAvatar}><Feather name="user" size={16} color="#fff" /></View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.riderName}>Mario Perez</Text>
-            <Text style={styles.riderMeta}>Honda Click • ABC 1234</Text>
+        <Text style={styles.trackStatus}>
+          {isOutForDelivery
+            ? `Your rider is on the way with your order!`
+            : `${branchLabel} has confirmed your order and is preparing it.`}
+        </Text>
+        <Text style={styles.trackNotify}>
+          {isOutForDelivery ? 'Your rider has been dispatched and is heading your way.' : "We'll notify you when your order is out for delivery."}
+        </Text>
+        <View style={styles.stepperWrap}>{stepper(stepIndex)}</View>
+        {isOutForDelivery && currentOrder?.rider_id ? (
+          <View style={styles.riderRow}>
+            <View style={styles.riderAvatar}><Feather name="user" size={16} color="#fff" /></View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.riderName}>{riderName || 'Your Rider'}</Text>
+              <Text style={styles.riderMeta}>Your delivery is on the way</Text>
+            </View>
+            <View style={styles.riderRating}>
+              <Ionicons name="star" size={15} color={colors.starYellow} />
+              <Text style={styles.riderMeta}>4.8</Text>
+            </View>
           </View>
-          <View style={styles.riderRating}>
-            <Ionicons name="star" size={15} color={colors.starYellow} />
-            <Text style={styles.riderMeta}>4.8</Text>
+        ) : isPending ? (
+          <View style={styles.riderRow}>
+            <View style={{ flex: 1, paddingVertical: 8 }}>
+              <Text style={styles.riderName}>Assigning Driver...</Text>
+              <Text style={styles.riderMeta}>We are matching you with a driver.</Text>
+            </View>
           </View>
-        </View>
-        <Pressable style={styles.simBtn} onPress={() => setDelivered(true)}><Text style={styles.simBtnText}>Simulate Delivery</Text></Pressable>
+        ) : null}
       </View>
     );
   };
@@ -1391,7 +1685,7 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
             <View style={styles.confirmCircle}><Feather name="check" size={56} color="#fff" /></View>
             <Text style={styles.confirmTitle}>Order Confirmed!</Text>
             <Text style={styles.confirmBody}>
-              Order# 12345 is confirmed at 11:30 AM{'\n'}Branch: {selectedBranch?.name ?? 'Not selected'}{'\n'}Contact Number: 09171234567
+              Order# {currentOrder?.id?.slice(0, 8).toUpperCase() ?? 'PENDING'} is confirmed{'\n'}Branch: {selectedBranch?.name ?? 'Not selected'}{'\n'}Contact Number: {customerContact}
               {deliverySchedule === 'later' && scheduledLabel
                 ? `\nScheduled Delivery: ${scheduledLabel}`
                 : `\nEstimated Delivery: ${estimatedEtaLabel}`}
@@ -1421,11 +1715,18 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
             <View style={styles.sheetBackdrop} />
             <View style={styles.feedbackSheet}>
               <Pressable style={styles.confirmClose} onPress={() => setFeedback('xfeedback')} hitSlop={8}><Feather name="x" size={16} color={colors.gray} /></Pressable>
-              <View style={styles.progressRow}>
-                <View style={styles.pdot} />
+              <Pressable
+                style={[styles.cta, { width: '80%' }]}
+                onPress={() => {
+                  showToast('Feedback submitted successfully. +50 pts!');
+                  setFeedback('none');
+                  onNavigate('home', { tab: 'rewards' });
+                }}
+              >
+                <Text style={styles.ctaText}>SUBMIT FEEDBACK</Text>
                 <View style={styles.pdash} />
                 <View style={[styles.pdot, feedback === 'rider' && { backgroundColor: colors.cardBorder }]} />
-              </View>
+              </Pressable>
               {feedback === 'rider' && (
                 <View style={styles.fbAvatarWrap}><View style={styles.fbAvatar}><Feather name="user" size={52} color="#fff" /></View></View>
               )}
@@ -1629,6 +1930,7 @@ const styles = StyleSheet.create({
   riderName: { fontFamily: fonts.medium, fontSize: 14, color: colors.label },
   riderMeta: { fontFamily: fonts.regular, fontSize: 14, color: colors.grayText },
   riderRating: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  stepperWrap: { marginBottom: 16, paddingBottom: 8 },
   simBtn: { borderWidth: 1, borderColor: colors.primary, borderRadius: radii.button, height: 32, alignItems: 'center', justifyContent: 'center' },
   simBtnText: { fontFamily: fonts.medium, fontSize: 11, color: colors.primary },
 
@@ -1637,8 +1939,19 @@ const styles = StyleSheet.create({
   stepRow: { flexDirection: 'row', alignItems: 'center', width: '100%' },
   stepNode: { width: 36, height: 36, borderRadius: 18, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   stepDot: { width: 12, height: 12, borderRadius: 6 },
-  stepLine: { flex: 1, height: 1 },
-  stepLabel: { paddingTop: 6, fontFamily: fonts.semibold, fontSize: 11 },
+  stepLine: { flex: 1, height: 2 },
+  // Label row mirrors the top row: a 36px anchor sits under the circle, a flex:1 spacer mirrors the line
+  stepLabelRow: { flexDirection: 'row', width: '100%', minHeight: 34 },
+  stepLabelAnchor: { width: 36, overflow: 'visible', alignItems: 'center' },
+  stepLabelSpacer: { flex: 1 },
+  stepLabel: {
+    marginTop: 6,
+    fontFamily: fonts.semibold,
+    fontSize: 10,
+    textAlign: 'center',
+    lineHeight: 14,
+    includeFontPadding: false,
+  },
 
   centerBackdrop: { flex: 1, backgroundColor: 'rgba(30,30,30,0.3)', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24 },
   dialog: { width: '100%', maxWidth: 358, backgroundColor: '#fff', borderRadius: radii.card, padding: 20, ...cardShadow },

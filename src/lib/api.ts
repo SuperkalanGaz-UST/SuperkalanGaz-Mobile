@@ -1,5 +1,11 @@
+import type { Session } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabase';
 import { API_URL } from '@/constants/config';
+
+function isSessionExpired(session: Session | null): boolean {
+  if (!session?.expires_at) return false;
+  return Date.now() >= session.expires_at * 1000 - 30_000;
+}
 
 /**
  * Thin client for the shared superkalan-crm-api backend (NestJS) — the SAME API
@@ -12,8 +18,19 @@ import { API_URL } from '@/constants/config';
  * error shape — so the two clients stay legible side by side.
  */
 export async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
-  const { data } = await supabase.auth.getSession();
-  const token = data.session?.access_token;
+  let { data: sessionData } = await supabase.auth.getSession();
+  let session = sessionData.session;
+
+  if (!session || isSessionExpired(session)) {
+    const { data: refreshedData, error } = await supabase.auth.refreshSession();
+    if (error || !refreshedData.session) {
+      await supabase.auth.signOut();
+      throw new Error('Your session expired. Please log in again.');
+    }
+    session = refreshedData.session;
+  }
+
+  const token = session?.access_token;
 
   const headers = new Headers(init.headers);
   if (token) headers.set('Authorization', `Bearer ${token}`);
@@ -21,6 +38,18 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
     headers.set('Content-Type', 'application/json');
   }
 
+  return fetch(`${API_URL}/api${path}`, { ...init, headers });
+}
+
+/**
+ * Like apiFetch but does NOT require a session — used for public endpoints
+ * such as POST /auth/register where the caller has no token yet.
+ */
+export async function apiPublicFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  const headers = new Headers(init.headers);
+  if (init.body && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
+  }
   return fetch(`${API_URL}/api${path}`, { ...init, headers });
 }
 

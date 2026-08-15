@@ -3,6 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { Session } from '@supabase/supabase-js';
 import { normalizePhMobile } from '@/lib/phMobile';
 import { supabase } from '@/lib/supabase';
+import { apiPublicFetch, apiErrorMessage } from '@/lib/api';
 
 /**
  * Owns the customer's auth session. Sign-in goes through Supabase Auth; the
@@ -126,27 +127,36 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       signInWithPhone: (phone, password, type) => runSignIn({ phone, password }, type),
       signUp: async (input) => {
         setAccountType(input.accountType);
-        const credentials =
-          input.method === 'email'
-            ? { email: input.identifier, password: input.password }
-            : { phone: input.identifier, password: input.password };
-        // Name/address/type ride along as user metadata for now. Once the API
-        // exposes a customer-profile endpoint, POST them there too (AGENTS.md §4).
-        const { data, error } = await supabase.auth.signUp({
-          ...credentials,
-          options: {
-            data: {
-              first_name: input.firstName,
-              last_name: input.lastName,
+
+        // Call the backend register endpoint instead of supabase.auth.signUp()
+        // directly, so app_metadata.role = "customer" is set at creation time.
+        // Client-side signUp() can only write user_metadata; the backend uses
+        // the service-role key which is the only way to write app_metadata.
+        try {
+          const res = await apiPublicFetch('/auth/register', {
+            method: 'POST',
+            body: JSON.stringify({
+              method: input.method,
+              identifier: input.identifier,
+              password: input.password,
+              firstName: input.firstName,
+              lastName: input.lastName,
               address: input.address,
-              account_type: input.accountType,
-            },
-          },
-        });
-        if (error) return { error: error.message, needsConfirmation: false };
-        await AsyncStorage.setItem(ACCOUNT_TYPE_KEY, input.accountType);
-        // No session back means the project requires email/SMS confirmation first.
-        return { error: null, needsConfirmation: !data.session };
+              accountType: input.accountType,
+            }),
+          });
+          const data = await res.json();
+          if (!res.ok) {
+            return { error: apiErrorMessage(data, 'Registration failed'), needsConfirmation: false };
+          }
+          await AsyncStorage.setItem(ACCOUNT_TYPE_KEY, input.accountType);
+          return { error: null, needsConfirmation: data.needsConfirmation === true };
+        } catch (err) {
+          return {
+            error: err instanceof Error ? err.message : 'Registration failed',
+            needsConfirmation: false,
+          };
+        }
       },
       verifySignUpOtp: async (method, identifier, token) => {
         const { error } =

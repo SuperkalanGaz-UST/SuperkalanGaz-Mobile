@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Image, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import { colors } from '@/theme/colors';
@@ -7,6 +7,7 @@ import { cardShadow, radii } from '@/theme/metrics';
 import { cylinderFor, images } from '@/lib/assets';
 import { AppHeader } from '@/components/ui/AppHeader';
 import { BottomNav } from '@/components/ui/BottomNav';
+import { apiErrorMessage, apiFetch } from '@/lib/api';
 import type { MainNavigateOptions, MainScreen } from '@/navigation/types';
 
 /**
@@ -18,8 +19,19 @@ import type { MainNavigateOptions, MainScreen } from '@/navigation/types';
  */
 type Sub = 'list' | 'details' | 'feedback-rate' | 'feedback-comment';
 
-const ACTIVE_ORDERS = [{ id: '12345', size: '11 KG', qty: 2, price: '₱ 1,000' }];
-const PAST_ORDERS = [{ id: '12345', size: '11 KG', qty: 2, price: '₱ 1,000', date: 'October 10, 2025' }];
+type OrderRow = {
+  id: string;
+  branch_id: string;
+  status: 'Pending' | 'Dispatched' | 'En Route' | 'Delivered' | 'Cancelled' | 'Under Review';
+  customer_name: string;
+  delivery_address: string;
+  cylinder_size: string;
+  quantity: number;
+  requested_at: string;
+  dispatched_at: string | null;
+  delivered_at: string | null;
+  total_amount: number | null;
+};
 
 function Stars({ value, onRate }: { value: number; onRate: (n: number) => void }) {
   return (
@@ -38,10 +50,46 @@ export function OrdersScreen({ onNavigate }: { onNavigate: (screen: MainScreen, 
   const [sub, setSub] = useState<Sub>('list');
   const [rating, setRating] = useState(0);
   const [comment, setComment] = useState('');
+  const [orders, setOrders] = useState<OrderRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const loadOrders = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const res = await apiFetch('/service-requests/me');
+        const data = await res.json();
+        if (!res.ok) throw new Error(apiErrorMessage(data, 'Failed to load orders'));
+        setOrders((data.serviceRequests as OrderRow[]) ?? []);
+      } catch (err) {
+        setOrders([]);
+        setError(err instanceof Error ? err.message : 'Failed to load orders');
+      } finally {
+        setLoading(false);
+      }
+    };
+    void loadOrders();
+  }, []);
+
+  const activeOrders = useMemo(
+    () => orders.filter((order) => order.status !== 'Delivered' && order.status !== 'Cancelled'),
+    [orders],
+  );
+  const pastOrders = useMemo(
+    () => orders.filter((order) => order.status === 'Delivered'),
+    [orders],
+  );
+
+  const formatMoney = (value: number | null) => (value === null
+    ? '₱ 0'
+    : new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP', maximumFractionDigits: 0 }).format(value));
+  const formatDate = (iso: string) => new Intl.DateTimeFormat('en-PH', { month: 'long', day: 'numeric', year: 'numeric' }).format(new Date(iso));
 
   const showFeedback = sub === 'feedback-rate' || sub === 'feedback-comment';
 
-  const orderCard = (o: { id: string; size: string; qty: number; price: string; date?: string }, past: boolean) => (
+  const orderCard = (o: OrderRow, past: boolean) => (
     <View key={o.id} style={styles.orderCard}>
       {past && (
         <View style={styles.completedBadge}>
@@ -49,11 +97,12 @@ export function OrdersScreen({ onNavigate }: { onNavigate: (screen: MainScreen, 
         </View>
       )}
       <View style={styles.orderBody}>
-        <Image source={cylinderFor(o.size)} style={styles.orderCyl} resizeMode="contain" />
+        <Image source={cylinderFor(o.cylinder_size)} style={styles.orderCyl} resizeMode="contain" />
         <View style={styles.orderInfo}>
-          <Text style={styles.cylSize}>{o.size}</Text>
-          <Text style={styles.cylQty}>Qty: {o.qty}</Text>
-          <Text style={styles.cylPrice}>{o.price}</Text>
+          <Text style={styles.cylSize}>{o.cylinder_size.toUpperCase()}</Text>
+          <Text style={styles.cylQty}>Qty: {o.quantity}</Text>
+          <Text style={styles.cylPrice}>{formatMoney(o.total_amount)}</Text>
+          <Text style={styles.orderStatus}>Status: {o.status}</Text>
         </View>
       </View>
       <View style={[styles.orderFooter, { height: past ? 50 : 30 }]}>
@@ -61,7 +110,7 @@ export function OrdersScreen({ onNavigate }: { onNavigate: (screen: MainScreen, 
           <Pressable onPress={() => setSub('details')}>
             <Text style={styles.footerLink}>View Order Details</Text>
           </Pressable>
-          {past && o.date ? <Text style={styles.footerDate}>Order Date: {o.date}</Text> : null}
+          <Text style={styles.footerDate}>Order Date: {formatDate(o.requested_at)}</Text>
         </View>
         {past && (
           <Pressable style={styles.rateBtn} onPress={() => { setRating(0); setComment(''); setSub('feedback-rate'); }}>
@@ -73,7 +122,7 @@ export function OrdersScreen({ onNavigate }: { onNavigate: (screen: MainScreen, 
   );
 
   const renderList = () => {
-    const orders = tab === 'active' ? ACTIVE_ORDERS : PAST_ORDERS;
+    const visibleOrders = tab === 'active' ? activeOrders : pastOrders;
     return (
       <>
         <Text style={[styles.title, { paddingHorizontal: 24, paddingTop: 20, paddingBottom: 16 }]}>My Orders</Text>
@@ -82,7 +131,7 @@ export function OrdersScreen({ onNavigate }: { onNavigate: (screen: MainScreen, 
             {(['active', 'past'] as const).map((t) => (
               <Pressable key={t} style={styles.tabItem} onPress={() => setTab(t)}>
                 <Text style={[styles.tabText, { color: tab === t ? colors.primary : colors.muted }]}>
-                  {t === 'active' ? `Active Orders (${ACTIVE_ORDERS.length})` : 'Past Orders'}
+                  {t === 'active' ? `Active Orders (${activeOrders.length})` : 'Past Orders'}
                 </Text>
               </Pressable>
             ))}
@@ -92,15 +141,29 @@ export function OrdersScreen({ onNavigate }: { onNavigate: (screen: MainScreen, 
           </View>
         </View>
         <View style={{ paddingTop: 16 }}>
-          {orders.length === 0 ? (
+          {loading ? (
             <View style={styles.empty}>
               <View style={styles.emptyBox}>
                 <Image source={images.logo} style={{ width: 160, height: 120 }} resizeMode="contain" />
               </View>
-              <Text style={styles.emptyText}>You have no active orders.</Text>
+              <Text style={styles.emptyText}>Loading your orders…</Text>
+            </View>
+          ) : error ? (
+            <View style={styles.empty}>
+              <View style={styles.emptyBox}>
+                <Image source={images.logo} style={{ width: 160, height: 120 }} resizeMode="contain" />
+              </View>
+              <Text style={styles.emptyText}>{error}</Text>
+            </View>
+          ) : visibleOrders.length === 0 ? (
+            <View style={styles.empty}>
+              <View style={styles.emptyBox}>
+                <Image source={images.logo} style={{ width: 160, height: 120 }} resizeMode="contain" />
+              </View>
+              <Text style={styles.emptyText}>{tab === 'active' ? 'You have no active orders.' : 'You have no completed orders yet.'}</Text>
             </View>
           ) : (
-            orders.map((o) => orderCard(o, tab === 'past'))
+            visibleOrders.map((o) => orderCard(o, tab === 'past'))
           )}
         </View>
       </>
@@ -117,23 +180,23 @@ export function OrdersScreen({ onNavigate }: { onNavigate: (screen: MainScreen, 
       </View>
       <View style={{ paddingHorizontal: 20 }}>
         <View style={styles.orderPill}>
-          <Text style={styles.orderPillText}>ORDER# 12345</Text>
+          <Text style={styles.orderPillText}>ORDER# {orders[0]?.id.slice(0, 8).toUpperCase() ?? 'PENDING'}</Text>
         </View>
         <Text style={styles.helpLink}>Get help with this order</Text>
-        <Text style={styles.metaText}>Order Date: 10 October 2025, 10:00 AM</Text>
+        <Text style={styles.metaText}>Order Date: {orders[0] ? new Intl.DateTimeFormat('en-PH', { month: 'long', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(orders[0].requested_at)) : '—'}</Text>
 
         <View style={styles.locRow}>
           <Feather name="map-pin" size={24} color={colors.primary} />
           <View>
             <Text style={styles.locLabel}>Ordered From</Text>
-            <Text style={styles.locValue}>Superkalan Gaz - Manila Branch</Text>
+            <Text style={styles.locValue}>{orders[0]?.branch_id ?? 'Your selected branch'}</Text>
           </View>
         </View>
         <View style={styles.locRow}>
           <Feather name="map-pin" size={24} color="#CFCFCF" />
           <View>
             <Text style={styles.locLabel}>Delivery Address</Text>
-            <Text style={styles.locValue}>123 Main St, Metro Manila</Text>
+            <Text style={styles.locValue}>{orders[0]?.delivery_address ?? '—'}</Text>
           </View>
         </View>
         <View style={[styles.locRow, { alignItems: 'center' }]}>
@@ -143,11 +206,11 @@ export function OrdersScreen({ onNavigate }: { onNavigate: (screen: MainScreen, 
       </View>
 
       <View style={styles.productCard}>
-        <Image source={cylinderFor('11 KG')} style={{ width: 82, height: 120, marginHorizontal: 24 }} resizeMode="contain" />
+        <Image source={cylinderFor(orders[0]?.cylinder_size ?? '11 KG')} style={{ width: 82, height: 120, marginHorizontal: 24 }} resizeMode="contain" />
         <View style={styles.productInfo}>
-          <Text style={styles.productSize}>11 KG</Text>
-          <Text style={styles.cylQty}>Qty: 2</Text>
-          <Text style={styles.productPrice}>₱ 1,000</Text>
+          <Text style={styles.productSize}>{orders[0]?.cylinder_size ?? '11 KG'}</Text>
+          <Text style={styles.cylQty}>Qty: {orders[0]?.quantity ?? 1}</Text>
+          <Text style={styles.productPrice}>{formatMoney(orders[0]?.total_amount ?? null)}</Text>
         </View>
       </View>
     </View>
@@ -246,6 +309,7 @@ const styles = StyleSheet.create({
   cylSize: { fontFamily: fonts.semibold, fontSize: 20, color: colors.label },
   cylQty: { fontFamily: fonts.medium, fontSize: 12, color: colors.grayText },
   cylPrice: { fontFamily: fonts.semibold, fontSize: 20, color: colors.primary },
+  orderStatus: { fontFamily: fonts.medium, fontSize: 11, color: colors.grayText },
   orderFooter: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 12, backgroundColor: colors.activeFooter },
   footerLink: { fontFamily: fonts.semibold, fontSize: 12, color: colors.heading },
   footerDate: { fontFamily: fonts.medium, fontSize: 10, color: colors.grayText },
