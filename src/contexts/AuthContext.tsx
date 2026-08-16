@@ -1,9 +1,9 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { Session } from '@supabase/supabase-js';
+import { apiErrorMessage, apiFetch, apiPublicFetch } from '@/lib/api';
 import { normalizePhMobile } from '@/lib/phMobile';
 import { supabase } from '@/lib/supabase';
-import { apiPublicFetch, apiErrorMessage } from '@/lib/api';
 
 /**
  * Owns the customer's auth session. Sign-in goes through Supabase Auth; the
@@ -47,6 +47,34 @@ export interface ProfileUpdateInput {
 
 /** AsyncStorage key for the persisted account type (survives app restarts). */
 const ACCOUNT_TYPE_KEY = 'superkalan.accountType';
+
+/**
+ * Customer authorization claims are written only by the NestJS service-role
+ * boundary. Refreshing afterwards puts the new claim into the signed JWT used
+ * by customer-only API endpoints.
+ */
+async function ensureCustomerSession(session: Session): Promise<{ session: Session; error: string | null }> {
+  const metadata = session.user.app_metadata;
+  if (metadata.role === 'customer' && metadata.status === 'Active') {
+    return { session, error: null };
+  }
+
+  try {
+    const response = await apiFetch('/customer/bootstrap', { method: 'POST' });
+    const data: unknown = await response.json().catch(() => null);
+    if (!response.ok) {
+      return { session, error: apiErrorMessage(data, 'Could not prepare this customer account.') };
+    }
+
+    const refreshed = await supabase.auth.refreshSession();
+    if (refreshed.error || !refreshed.data.session) {
+      return { session, error: refreshed.error?.message ?? 'Could not refresh the customer session.' };
+    }
+    return { session: refreshed.data.session, error: null };
+  } catch {
+    return { session, error: 'Could not reach the service to prepare this customer account.' };
+  }
+}
 
 interface AuthContextValue {
   session: Session | null;
@@ -93,8 +121,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     // Restore any persisted session + account type, then keep them in sync.
     Promise.all([supabase.auth.getSession(), AsyncStorage.getItem(ACCOUNT_TYPE_KEY)]).then(
-      ([{ data }, storedType]) => {
-        setSession(data.session);
+      async ([{ data }, storedType]) => {
+        const restored = data.session ? await ensureCustomerSession(data.session) : null;
+        setSession(restored?.session ?? data.session);
         if (storedType === 'household' || storedType === 'commercial') setAccountType(storedType);
         setInitializing(false);
       },
@@ -115,8 +144,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     ): Promise<{ error: string | null }> => {
       setAccountType(chosenType);
       const { error } = await supabase.auth.signInWithPassword(credentials);
-      if (!error) await AsyncStorage.setItem(ACCOUNT_TYPE_KEY, chosenType);
-      return { error: error?.message ?? null };
+      if (error) return { error: error.message };
+
+      const { data } = await supabase.auth.getSession();
+      if (!data.session) return { error: 'No signed-in customer session was created' };
+      const prepared = await ensureCustomerSession(data.session);
+      if (prepared.error) return { error: prepared.error };
+      setSession(prepared.session);
+      await AsyncStorage.setItem(ACCOUNT_TYPE_KEY, chosenType);
+      return { error: null };
     };
 
     return {
@@ -159,7 +195,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       },
       verifySignUpOtp: async (method, identifier, token) => {
-        const { error } =
+        const { data, error } =
           method === 'email'
             ? await supabase.auth.verifyOtp({
                 email: identifier,
@@ -171,7 +207,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 token,
                 type: 'sms',
               });
-        return { error: error?.message ?? null };
+        if (error) return { error: error.message };
+        const verifiedSession = data.session ?? (await supabase.auth.getSession()).data.session;
+        if (!verifiedSession) return { error: 'No signed-in customer session was created' };
+        const prepared = await ensureCustomerSession(verifiedSession);
+        if (!prepared.error) setSession(prepared.session);
+        return { error: prepared.error };
       },
       resendSignUpOtp: async (method, identifier) => {
         const { error } =

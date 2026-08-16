@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, FlatList, Image, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors } from '@/theme/colors';
 import { fonts } from '@/theme/fonts';
@@ -17,6 +16,13 @@ import { normalizePhMobile } from '@/lib/phMobile';
 import { PH_ADDRESS_AREAS, PH_LOCATION_DATA_VERSION, type PhAddressArea } from '@/lib/phLocations';
 import type { MainScreen, MainTab } from '@/navigation/types';
 import { AddressMap } from '@/components/maps/AddressMap';
+import {
+  createCustomerAddress,
+  listCustomerAddresses,
+  updateCustomerAddress,
+  type CustomerAddressRow,
+  type SaveCustomerAddressInput,
+} from '@/lib/customerAddresses';
 
 /**
  * Order flow (Figma "OrderProcess"): delivery address + branch → product select
@@ -33,10 +39,16 @@ type Payment = 'gcash' | 'maya' | 'cash';
 type FeedbackStep = 'none' | 'rider' | 'store' | 'xfeedback';
 type DeliverySchedule = 'now' | 'later';
 type AddressSelectField = 'province' | 'city' | 'barangay';
+type AddressEntryMode = 'choice' | 'current' | 'map' | 'manual';
 
 type Coordinate = {
   latitude: number;
   longitude: number;
+};
+
+type NominatimReverseResponse = {
+  display_name?: string;
+  address?: Record<string, string | undefined>;
 };
 
 type SavedAddress = {
@@ -50,6 +62,7 @@ type SavedAddress = {
   landmark?: string;
   contact: string;
   coordinate?: Coordinate;
+  persisted: boolean;
 };
 
 type BranchOption = {
@@ -215,6 +228,24 @@ function metadataText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function savedAddressFromRow(row: CustomerAddressRow): SavedAddress {
+  return {
+    id: row.id,
+    label: row.label,
+    address: row.full_address,
+    province: row.province,
+    city: row.city,
+    barangay: row.barangay,
+    street: row.street,
+    landmark: row.landmark ?? undefined,
+    contact: row.contact_number,
+    coordinate: row.latitude !== null && row.longitude !== null
+      ? { latitude: row.latitude, longitude: row.longitude }
+      : undefined,
+    persisted: true,
+  };
+}
+
 export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainScreen, opts?: { tab?: MainTab }) => void }) {
   const insets = useSafeAreaInsets();
   const { session } = useAuth();
@@ -238,6 +269,7 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
         barangay: '',
         street: profileAddress,
         contact: normalizePhMobile(profileContact) ?? '',
+        persisted: false,
       }
     : null, [session?.user.id, profileAddress, profileContact]);
   const products = useMemo(
@@ -251,40 +283,8 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
   const [modal, setModal] = useState<ModalKind>('none');
   const [quantities, setQuantities] = useState<Record<string, number>>({});
   const [savedAddresses, setSavedAddresses] = useState<SavedAddress[]>(() => initialAddress ? [initialAddress] : []);
-  const [hasLoadedAddresses, setHasLoadedAddresses] = useState(false);
-  const initialAddressRef = useRef(initialAddress);
-  initialAddressRef.current = initialAddress;
-
-  useEffect(() => {
-    if (!session?.user?.id) return;
-    const load = async () => {
-      try {
-        const stored = await AsyncStorage.getItem(`savedAddresses_${session.user.id}`);
-        if (stored) {
-          const parsed = JSON.parse(stored);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            const existingIds = new Set(parsed.map((a: SavedAddress) => a.id));
-            if (initialAddressRef.current && !existingIds.has(initialAddressRef.current.id)) {
-              setSavedAddresses([initialAddressRef.current, ...parsed]);
-            } else {
-              setSavedAddresses(parsed);
-            }
-          }
-        }
-      } catch (e) {
-        // ignore
-      } finally {
-        setHasLoadedAddresses(true);
-      }
-    };
-    void load();
-  }, [session?.user?.id]);
-
-  useEffect(() => {
-    if (!session?.user?.id || !hasLoadedAddresses) return;
-    AsyncStorage.setItem(`savedAddresses_${session.user.id}`, JSON.stringify(savedAddresses)).catch(() => {});
-  }, [savedAddresses, session?.user?.id, hasLoadedAddresses]);
-
+  const [addressesLoading, setAddressesLoading] = useState(Boolean(session?.user.id));
+  const [addressSaving, setAddressSaving] = useState(false);
   const addressAreas = PH_ADDRESS_AREAS;
   const [address, setAddress] = useState<SavedAddress | null>(initialAddress);
   const [branches, setBranches] = useState<BranchOption[]>([]);
@@ -316,10 +316,16 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
   const [editingAddressId, setEditingAddressId] = useState<string | null>(null);
   const [addressSelectField, setAddressSelectField] = useState<AddressSelectField | null>(null);
   const [addressOptionQuery, setAddressOptionQuery] = useState('');
-  const [addressPin, setAddressPin] = useState<Coordinate>(DEFAULT_ADDRESS_CENTER);
+  const [addressEntryMode, setAddressEntryMode] = useState<AddressEntryMode>('choice');
+  const [addressPin, setAddressPin] = useState<Coordinate | null>(null);
   const [addressMapCenter, setAddressMapCenter] = useState<Coordinate>(DEFAULT_ADDRESS_CENTER);
+  const [mapFullscreen, setMapFullscreen] = useState(false);
+  const [mapGeocodeLoading, setMapGeocodeLoading] = useState(false);
   const [locationLoading, setLocationLoading] = useState(false);
   const [locationMessage, setLocationMessage] = useState('Move the pin or tap the map to adjust it.');
+  const mapGeocodeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mapGeocodeRequest = useRef(0);
+  const lastMapGeocodeAt = useRef(0);
   const [placingOrder, setPlacingOrder] = useState(false);
   const [currentOrder, setCurrentOrder] = useState<OrderRow | null>(null);
   const [orderPlacedAt, setOrderPlacedAt] = useState<Date | null>(null);
@@ -446,6 +452,39 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
     || (deliverySchedule === 'later' && Boolean(scheduledLabel));
   const canContinueFromLocation = Boolean(address && selectedBranch);
 
+  useEffect(() => {
+    let active = true;
+    if (!session?.user.id) {
+      setAddressesLoading(false);
+      return () => { active = false; };
+    }
+    if (session.user.app_metadata.role !== 'customer') {
+      setAddressesLoading(false);
+      return () => { active = false; };
+    }
+
+    setAddressesLoading(true);
+    void listCustomerAddresses()
+      .then((rows) => {
+        if (!active || rows.length === 0) return;
+        const loaded = rows.map(savedAddressFromRow);
+        setSavedAddresses(loaded);
+        setAddress((current) => loaded.find((item) => item.id === current?.id) ?? loaded[0]);
+      })
+      .catch((loadError: unknown) => {
+        if (!active) return;
+        setToast(loadError instanceof Error ? loadError.message : 'Could not load saved addresses.');
+        setTimeout(() => { if (active) setToast(''); }, 2500);
+      })
+      .finally(() => { if (active) setAddressesLoading(false); });
+
+    return () => { active = false; };
+  }, [
+    session?.user.id,
+    session?.user.app_metadata.role,
+    session?.user.app_metadata.status,
+  ]);
+
   const changeProductQuantity = (productId: string, amount: number) => {
     setQuantities((current) => ({
       ...current,
@@ -544,6 +583,143 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
     }
   };
 
+  useEffect(() => () => {
+    if (mapGeocodeTimer.current) clearTimeout(mapGeocodeTimer.current);
+    mapGeocodeRequest.current += 1;
+  }, []);
+
+  const reverseGeocodeMapPin = async (coordinate: Coordinate, requestId: number) => {
+    lastMapGeocodeAt.current = Date.now();
+
+    try {
+      const query = new URLSearchParams({
+        format: 'jsonv2',
+        addressdetails: '1',
+        zoom: '18',
+        lat: String(coordinate.latitude),
+        lon: String(coordinate.longitude),
+      });
+      const response = await fetch(`https://nominatim.openstreetmap.org/reverse?${query.toString()}`, {
+        headers: {
+          Accept: 'application/json',
+          'Accept-Language': 'en',
+          'User-Agent': 'SuperkalanGazMobile/1.0 (delivery-address-picker)',
+        },
+      });
+      if (!response.ok) throw new Error(`Geocoder returned ${response.status}`);
+
+      const result = await response.json() as NominatimReverseResponse;
+      if (requestId !== mapGeocodeRequest.current) return;
+
+      const geocoded = result.address ?? {};
+      const rawRegion = cleanAddressPart(geocoded.state || geocoded.region || geocoded.province);
+      const regionKey = addressPartKey(rawRegion);
+      const provinceCandidate = ['national capital region', 'ncr', 'metropolitan manila', 'metro manila']
+        .includes(regionKey)
+        ? 'National Capital Region (NCR)'
+        : rawRegion;
+      const rawCity = cleanAddressPart(
+        geocoded.city || geocoded.town || geocoded.municipality || geocoded.village || geocoded.county,
+      );
+      const inferredLocation = findAreaAndCity(
+        [rawCity, cleanAddressPart(geocoded.suburb), cleanAddressPart(geocoded.neighbourhood)],
+        addressAreas,
+      );
+      const province = matchAddressOption(provinceCandidate, Object.keys(addressAreas))
+        || inferredLocation?.area
+        || '';
+      const cityOptions = Object.keys(addressAreas[province]?.cities ?? {});
+      const city = matchAddressOption(rawCity, cityOptions)
+        || (inferredLocation?.area === province ? inferredLocation.city : '')
+        || '';
+      const rawBarangay = cleanAddressPart(
+        geocoded.suburb || geocoded.neighbourhood || geocoded.quarter || geocoded.hamlet,
+      );
+      const barangayOptions = addressAreas[province]?.cities[city] ?? [];
+      const barangay = matchAddressOption(rawBarangay, [...barangayOptions]);
+      const explicitStreet = [cleanAddressPart(geocoded.house_number), cleanAddressPart(geocoded.road)]
+        .filter(Boolean)
+        .join(' ');
+      const displayStreet = cleanAddressPart(result.display_name).split(',')[0] ?? '';
+      const street = explicitStreet || displayStreet;
+      const landmark = cleanAddressPart(geocoded.amenity || geocoded.shop || geocoded.building || geocoded.tourism);
+
+      if (province) setEaProvince(province);
+      if (city) setEaCity(city);
+      if (barangay) setEaBarangay(barangay);
+      if (street) setEaStreet(street);
+      if (landmark) setEaLandmark(landmark);
+
+      const missingDetails = [
+        !province ? 'province' : '',
+        !city ? 'city/municipality' : '',
+        !barangay ? 'barangay' : '',
+        !street ? 'street/unit' : '',
+      ].filter(Boolean);
+      setLocationMessage(missingDetails.length
+        ? `Location found. Add or verify ${missingDetails.join(', ')}.`
+        : 'Address details filled. Add your unit number if applicable.');
+    } catch {
+      if (requestId === mapGeocodeRequest.current) {
+        setLocationMessage('Pin placed. Enter or verify the address details below.');
+      }
+    } finally {
+      if (requestId === mapGeocodeRequest.current) setMapGeocodeLoading(false);
+    }
+  };
+
+  const queueMapReverseGeocode = (coordinate: Coordinate) => {
+    // The public Nominatim instance is shared infrastructure, so reverse-geocode
+    // only the latest settled pin and keep requests at least one second apart.
+    if (mapGeocodeTimer.current) clearTimeout(mapGeocodeTimer.current);
+    const requestId = mapGeocodeRequest.current + 1;
+    mapGeocodeRequest.current = requestId;
+    setMapGeocodeLoading(true);
+    setLocationMessage('Looking up this pinned location…');
+
+    const elapsed = Date.now() - lastMapGeocodeAt.current;
+    const delay = Math.max(1000 - elapsed, 0);
+    mapGeocodeTimer.current = setTimeout(() => {
+      mapGeocodeTimer.current = null;
+      void reverseGeocodeMapPin(coordinate, requestId);
+    }, delay);
+  };
+
+  const openMapPicker = () => {
+    setAddressEntryMode('map');
+    setMapFullscreen(true);
+    setLocationMessage(addressPin
+      ? 'Drag the pin to adjust it, then confirm this location.'
+      : 'Drag the pin to the delivery point, then confirm this location.');
+  };
+
+  const confirmMapLocation = () => {
+    setMapFullscreen(false);
+    setLocationMessage(mapGeocodeLoading
+      ? 'Location selected. Review the address details while the lookup finishes.'
+      : 'Location pinned. Review the address details below before saving.');
+  };
+
+  const selectAddressEntryMode = (mode: Exclude<AddressEntryMode, 'choice'>) => {
+    setAddressEntryMode(mode);
+    setAddressSelectField(null);
+    setAddressOptionQuery('');
+
+    if (mode === 'manual') {
+      setAddressPin(null);
+      setLocationMessage('Enter the delivery details below. You can add a map pin later.');
+      return;
+    }
+
+    if (mode === 'map') {
+      openMapPicker();
+      return;
+    }
+
+    setLocationMessage('Finding your current location…');
+    void requestDeviceLocation();
+  };
+
   const openAddressEditor = (existing?: SavedAddress) => {
     const inferredLocation = existing && (!existing.province || !existing.city)
       ? findAreaAndCity(existing.address.split(',').reverse(), addressAreas)
@@ -559,22 +735,31 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
     setEaPhoneError('');
     setAddressSelectField(null);
     setAddressOptionQuery('');
+    setAddressEntryMode(existing ? (existing.coordinate ? 'map' : 'manual') : 'choice');
+    setMapFullscreen(false);
+    setMapGeocodeLoading(false);
+    if (mapGeocodeTimer.current) clearTimeout(mapGeocodeTimer.current);
+    mapGeocodeRequest.current += 1;
+    setLocationLoading(false);
 
     if (existing?.coordinate) {
       setAddressPin(existing.coordinate);
       setAddressMapCenter(existing.coordinate);
       setLocationMessage('Pin placed at this saved address.');
     } else {
-      setLocationMessage('Move the pin or tap the map to adjust it.');
+      setAddressPin(null);
+      setAddressMapCenter(DEFAULT_ADDRESS_CENTER);
+      setLocationMessage(existing
+        ? 'Enter the delivery details below. You can add a map pin later.'
+        : 'Choose how you want to add this delivery address.');
     }
 
     setModal('editAddress');
-    if (!existing) void requestDeviceLocation();
   };
 
   const updateAddressPin = (coordinate: Coordinate) => {
     setAddressPin(coordinate);
-    setLocationMessage('Pin adjusted for this delivery address.');
+    if (addressEntryMode === 'map') queueMapReverseGeocode(coordinate);
   };
 
   const addressSelectOptions = addressSelectField === 'province'
@@ -614,7 +799,7 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
     setAddressSelectField(null);
   };
 
-  const saveAddress = () => {
+  const saveAddress = async () => {
     const label = eaLabel.trim();
     const street = eaStreet.trim();
     const normalizedContact = normalizePhMobile(eaContact);
@@ -628,29 +813,36 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
       return;
     }
 
-    const nextAddress: SavedAddress = {
-      id: editingAddressId ?? `address-${Date.now()}`,
+    const input: SaveCustomerAddressInput = {
       label,
-      address: `${street}, ${eaBarangay}, ${eaCity}, ${eaProvince}`,
       province: eaProvince,
       city: eaCity,
       barangay: eaBarangay,
       street,
       landmark: eaLandmark.trim() || undefined,
-      contact: normalizedContact,
-      coordinate: addressPin,
+      contactNumber: normalizedContact,
+      ...(addressPin ? { latitude: addressPin.latitude, longitude: addressPin.longitude } : {}),
     };
 
-    setSavedAddresses((current) => {
-      const exists = current.some((savedAddress) => savedAddress.id === nextAddress.id);
-      return exists
-        ? current.map((savedAddress) => savedAddress.id === nextAddress.id ? nextAddress : savedAddress)
-        : [...current, nextAddress];
-    });
-    setAddress(nextAddress);
-    void loadBranchesForAddress(nextAddress);
-    setModal('none');
-    showToast(editingAddressId ? 'Address updated.' : 'Address saved.');
+    setAddressSaving(true);
+    try {
+      const existing = savedAddresses.find((savedAddress) => savedAddress.id === editingAddressId);
+      const row = existing?.persisted
+        ? await updateCustomerAddress(existing.id, input)
+        : await createCustomerAddress(input);
+      const nextAddress = savedAddressFromRow(row);
+
+      setSavedAddresses((current) => existing?.persisted
+        ? current.map((savedAddress) => savedAddress.id === existing.id ? nextAddress : savedAddress)
+        : [...current.filter((savedAddress) => savedAddress.id !== editingAddressId), nextAddress]);
+      setAddress(nextAddress);
+      setModal('none');
+      showToast(existing?.persisted ? 'Address updated and saved.' : 'Address saved to your account.');
+    } catch (saveError) {
+      showToast(saveError instanceof Error ? saveError.message : 'Could not save this address.');
+    } finally {
+      setAddressSaving(false);
+    }
   };
 
   const openScheduleModal = () => {
@@ -1304,6 +1496,7 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
             {savedAddresses.length === 0 ? (
               <Text style={styles.metaText}>You do not have a saved delivery address yet.</Text>
             ) : null}
+            {addressesLoading ? <ActivityIndicator color={colors.primary} /> : null}
             {savedAddresses.map((a) => {
               const sel = address?.id === a.id;
               return (
@@ -1329,8 +1522,55 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
       </Modal>
 
       {/* Add / edit delivery address */}
-      <Modal visible={modal === 'editAddress'} transparent animationType="fade" onRequestClose={() => setModal('none')}>
-        <View style={styles.addressModalBackdrop}>
+      <Modal
+        visible={modal === 'editAddress'}
+        transparent
+        animationType="fade"
+        onRequestClose={() => (mapFullscreen ? setMapFullscreen(false) : setModal('none'))}
+      >
+        <View style={mapFullscreen ? styles.addressMapFullscreenBackdrop : styles.addressModalBackdrop}>
+          {mapFullscreen ? (
+            <View style={styles.addressMapFullscreen}>
+              <AddressMap
+                center={addressMapCenter}
+                pin={addressPin ?? addressMapCenter}
+                onPinChange={updateAddressPin}
+              />
+              <View style={styles.addressMapTopBar}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Back to address form"
+                  onPress={() => setMapFullscreen(false)}
+                  style={styles.addressMapTopButton}
+                >
+                  <Feather name="arrow-left" size={20} color={colors.heading} />
+                </Pressable>
+                <Text style={styles.addressMapTopTitle}>Choose delivery location</Text>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Close address picker"
+                  onPress={() => { setMapFullscreen(false); setModal('none'); }}
+                  style={styles.addressMapTopButton}
+                >
+                  <Feather name="x" size={20} color={colors.heading} />
+                </Pressable>
+              </View>
+              <View style={styles.addressMapBottomCard}>
+                <Text style={styles.addressMapBottomTitle}>Move the pin to your delivery point</Text>
+                <Text style={styles.addressMapBottomText}>
+                  {mapGeocodeLoading ? 'Looking up the address…' : locationMessage}
+                </Text>
+                <Text style={styles.addressMapAttribution}>© OpenStreetMap contributors • Nominatim</Text>
+                <PrimaryButton
+                  label={mapGeocodeLoading ? 'Looking up address…' : 'Use this location'}
+                  disabled={!addressPin || mapGeocodeLoading}
+                  onPress={confirmMapLocation}
+                  style={styles.addressMapConfirmButton}
+                />
+              </View>
+            </View>
+          ) : (
+          <>
           <View style={styles.addressDialog}>
             <View style={styles.addressDialogHead}>
               <Text style={styles.addressDialogTitle}>
@@ -1341,21 +1581,83 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
               </Pressable>
             </View>
 
+            {addressEntryMode === 'choice' ? (
+              <View style={styles.addressMethodContent}>
+                <Text style={styles.addressMethodIntroTitle}>How would you like to add it?</Text>
+                <Text style={styles.addressMethodIntroText}>
+                  Choose an option below. You can review and edit the address before saving.
+                </Text>
+
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Use my current location"
+                  onPress={() => selectAddressEntryMode('current')}
+                  style={({ pressed }) => [styles.addressMethodOption, pressed ? styles.controlPressed : null]}
+                >
+                  <View style={styles.addressMethodIcon}>
+                    <Feather name="navigation" size={20} color={colors.primary} />
+                  </View>
+                  <View style={styles.addressMethodCopy}>
+                    <Text style={styles.addressMethodTitle}>Use my location</Text>
+                    <Text style={styles.addressMethodText}>Fill in nearby address details using your device location.</Text>
+                  </View>
+                  <Feather name="chevron-right" size={20} color={colors.heading} />
+                </Pressable>
+
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Choose address on map"
+                  onPress={() => selectAddressEntryMode('map')}
+                  style={({ pressed }) => [styles.addressMethodOption, pressed ? styles.controlPressed : null]}
+                >
+                  <View style={styles.addressMethodIcon}>
+                    <Feather name="map-pin" size={20} color={colors.primary} />
+                  </View>
+                  <View style={styles.addressMethodCopy}>
+                    <Text style={styles.addressMethodTitle}>Choose on map</Text>
+                    <Text style={styles.addressMethodText}>Tap or drag a pin, then confirm the address details.</Text>
+                  </View>
+                  <Feather name="chevron-right" size={20} color={colors.heading} />
+                </Pressable>
+
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Enter address manually"
+                  onPress={() => selectAddressEntryMode('manual')}
+                  style={({ pressed }) => [styles.addressMethodOption, pressed ? styles.controlPressed : null]}
+                >
+                  <View style={styles.addressMethodIcon}>
+                    <Feather name="edit-3" size={20} color={colors.primary} />
+                  </View>
+                  <View style={styles.addressMethodCopy}>
+                    <Text style={styles.addressMethodTitle}>Enter manually</Text>
+                    <Text style={styles.addressMethodText}>Type the delivery address without sharing your location.</Text>
+                  </View>
+                  <Feather name="chevron-right" size={20} color={colors.heading} />
+                </Pressable>
+
+                <View style={styles.addressMethodPrivacyRow}>
+                  <Feather name="shield" size={17} color={colors.primary} />
+                  <Text style={styles.addressMethodPrivacyText}>Location permission is requested only when you choose it.</Text>
+                </View>
+              </View>
+            ) : (
             <ScrollView
               showsVerticalScrollIndicator={false}
               keyboardShouldPersistTaps="handled"
               contentContainerStyle={styles.addressDialogContent}
             >
+              {addressEntryMode !== 'manual' ? (
               <View style={styles.addressMapWrap}>
                 <AddressMap
                   center={addressMapCenter}
-                  pin={addressPin}
+                  pin={addressPin ?? addressMapCenter}
                   onPinChange={updateAddressPin}
                 />
                 <Pressable
                   accessibilityRole="button"
                   disabled={locationLoading}
-                  onPress={() => void requestDeviceLocation()}
+                  onPress={() => selectAddressEntryMode('current')}
                   style={({ pressed }) => [
                     styles.useLocationButton,
                     pressed && !locationLoading ? styles.controlPressed : null,
@@ -1369,11 +1671,24 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
                   </Text>
                 </Pressable>
               </View>
+              ) : null}
 
               <View style={styles.pinStatusRow}>
-                <Feather name="map-pin" size={16} color={colors.primary} />
+                <Feather name={addressEntryMode === 'manual' ? 'edit-3' : 'map-pin'} size={16} color={colors.primary} />
                 <Text style={styles.pinStatusText}>{locationMessage}</Text>
               </View>
+
+              <Pressable
+                accessibilityRole="button"
+                accessibilityState={{ disabled: locationLoading }}
+                accessibilityLabel="Change address entry method"
+                disabled={locationLoading}
+                onPress={() => setAddressEntryMode('choice')}
+                style={[styles.changeAddressMethod, locationLoading ? styles.changeAddressMethodDisabled : null]}
+              >
+                <Feather name="arrow-left" size={14} color={colors.primary} />
+                <Text style={styles.changeAddressMethodText}>Change method</Text>
+              </Pressable>
 
               <View style={styles.addressFormRow}>
                 <View style={styles.addressFormColumn}>
@@ -1489,8 +1804,14 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
                 <Text style={styles.addressPrivacyText}>Used only to confirm this delivery address.</Text>
               </View>
 
-              <PrimaryButton label="Save address" onPress={saveAddress} style={styles.addressSaveButton} />
+              <PrimaryButton
+                label={addressSaving ? 'Saving address…' : 'Save address'}
+                disabled={addressSaving}
+                onPress={() => void saveAddress()}
+                style={styles.addressSaveButton}
+              />
             </ScrollView>
+            )}
           </View>
 
           {addressSelectField ? (
@@ -1549,6 +1870,8 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
               </View>
             </View>
           ) : null}
+          </>
+          )}
         </View>
       </Modal>
 
@@ -1972,6 +2295,37 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 24,
   },
+  addressMapFullscreenBackdrop: { flex: 1, backgroundColor: colors.surface },
+  addressMapFullscreen: { flex: 1, backgroundColor: colors.redeemPale },
+  addressMapTopBar: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    paddingTop: 48,
+    paddingHorizontal: 14,
+    paddingBottom: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: 'rgba(255,255,255,0.94)',
+  },
+  addressMapTopButton: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.surface },
+  addressMapTopTitle: { flex: 1, marginHorizontal: 10, fontFamily: fonts.semibold, fontSize: 16, color: colors.heading, textAlign: 'center' },
+  addressMapBottomCard: {
+    position: 'absolute',
+    left: 12,
+    right: 12,
+    bottom: 18,
+    padding: 16,
+    borderRadius: radii.card,
+    backgroundColor: colors.surface,
+    ...cardShadow,
+  },
+  addressMapBottomTitle: { fontFamily: fonts.semibold, fontSize: 15, color: colors.heading, marginBottom: 4 },
+  addressMapBottomText: { fontFamily: fonts.regular, fontSize: 11, lineHeight: 16, color: colors.grayText, marginBottom: 6 },
+  addressMapAttribution: { fontFamily: fonts.regular, fontSize: 9, color: colors.muted, marginBottom: 10 },
+  addressMapConfirmButton: { marginTop: 2 },
   addressDialog: {
     width: '100%',
     maxWidth: 430,
@@ -1990,6 +2344,28 @@ const styles = StyleSheet.create({
     paddingBottom: 12,
   },
   addressDialogTitle: { fontFamily: fonts.semibold, fontSize: 18, color: colors.heading },
+  addressMethodContent: { paddingHorizontal: 14, paddingBottom: 18 },
+  addressMethodIntroTitle: { fontFamily: fonts.semibold, fontSize: 17, color: colors.heading, marginTop: 4 },
+  addressMethodIntroText: { fontFamily: fonts.regular, fontSize: 11, lineHeight: 16, color: colors.gray, marginTop: 5, marginBottom: 16 },
+  addressMethodOption: {
+    minHeight: 76,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+    borderRadius: radii.card,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 10,
+    backgroundColor: colors.surface,
+  },
+  addressMethodIcon: { width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.redeemPale },
+  addressMethodCopy: { flex: 1, minWidth: 0 },
+  addressMethodTitle: { fontFamily: fonts.semibold, fontSize: 13, color: colors.heading, marginBottom: 2 },
+  addressMethodText: { fontFamily: fonts.regular, fontSize: 10, lineHeight: 14, color: colors.gray },
+  addressMethodPrivacyRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingTop: 8 },
+  addressMethodPrivacyText: { flex: 1, fontFamily: fonts.regular, fontSize: 10, lineHeight: 15, color: colors.grayText },
   addressDialogContent: { paddingHorizontal: 14, paddingBottom: 16 },
   addressMapWrap: { height: 154, borderRadius: radii.card, overflow: 'hidden', backgroundColor: colors.redeemPale },
   useLocationButton: {
@@ -2009,6 +2385,9 @@ const styles = StyleSheet.create({
   useLocationText: { fontFamily: fonts.semibold, fontSize: 12, color: colors.primary },
   pinStatusRow: { minHeight: 40, flexDirection: 'row', alignItems: 'center', gap: 7 },
   pinStatusText: { flex: 1, fontFamily: fonts.medium, fontSize: 11, lineHeight: 16, color: colors.primary },
+  changeAddressMethod: { flexDirection: 'row', alignItems: 'center', gap: 5, alignSelf: 'flex-start', minHeight: 30, marginBottom: 4 },
+  changeAddressMethodDisabled: { opacity: 0.5 },
+  changeAddressMethodText: { fontFamily: fonts.semibold, fontSize: 11, color: colors.primary },
   addressFormRow: { flexDirection: 'row', gap: 10, marginBottom: 10 },
   addressFormColumn: { flex: 1, minWidth: 0 },
   addressFieldLabel: { fontFamily: fonts.medium, fontSize: 10, color: colors.primary, marginBottom: 4 },
