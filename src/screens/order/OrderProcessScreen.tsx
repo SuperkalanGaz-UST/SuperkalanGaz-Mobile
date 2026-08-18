@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, FlatList, Image, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, AppState, FlatList, Image, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import * as WebBrowser from 'expo-web-browser';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -35,7 +36,8 @@ import {
  */
 type Step = 'location' | 'select' | 'schedule' | 'summary' | 'track';
 type ModalKind = 'none' | 'selectAddress' | 'editAddress' | 'confirmed' | 'sched' | 'payment';
-type Payment = 'gcash' | 'maya' | 'cash';
+type Payment = 'paymongo' | 'cash';
+type PaymentStatus = 'Unpaid' | 'Pending' | 'Paid';
 type FeedbackStep = 'none' | 'rider' | 'store' | 'xfeedback';
 type DeliverySchedule = 'now' | 'later';
 type AddressSelectField = 'province' | 'city' | 'barangay';
@@ -87,7 +89,19 @@ type OrderRow = {
   dispatched_at: string | null;
   delivered_at: string | null;
   rider_id?: string | null;
+  payment_method: 'Cash on Delivery' | 'PayMongo';
+  payment_status: PaymentStatus;
+  payment_paid_at: string | null;
 };
+
+type PaymentResponse = {
+  method: OrderRow['payment_method'];
+  status: PaymentStatus;
+  paidAt: string | null;
+  checkoutUrl?: string | null;
+};
+
+WebBrowser.maybeCompleteAuthSession();
 
 const PRODUCT_DETAILS: Array<{ id: CylinderSize; label: string; eta: string; use: string }> = [
   { id: '2.7kg', label: '2.7 KG', eta: '12:00 - 12:05 PM', use: 'Portable • Outdoor use' },
@@ -289,8 +303,8 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
   const [address, setAddress] = useState<SavedAddress | null>(initialAddress);
   const [branches, setBranches] = useState<BranchOption[]>([]);
   const [selectedBranch, setSelectedBranch] = useState<BranchOption | null>(null);
-  const [payment, setPayment] = useState<Payment>('gcash');
-  const [tempPayment, setTempPayment] = useState<Payment>('gcash');
+  const [payment, setPayment] = useState<Payment>('paymongo');
+  const [tempPayment, setTempPayment] = useState<Payment>('paymongo');
   const [delivered, setDelivered] = useState(false);
   const [feedback, setFeedback] = useState<FeedbackStep>('none');
   const [riderRating, setRiderRating] = useState(0);
@@ -440,6 +454,150 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
   const formatTime = (d: Date) => d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
   const estimatedEtaLabel = `${formatTime(minEta)} – ${formatTime(maxEta)}`;
   const showToast = (m: string) => { setToast(m); setTimeout(() => setToast(''), 2500); };
+
+  const refreshPaymentStatus = async (orderId: string): Promise<PaymentResponse | null> => {
+    try {
+      const response = await apiFetch(`/service-requests/${orderId}/payment?_t=${Date.now()}`, {
+        cache: 'no-store',
+        headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' },
+      });
+      const data = await response.json();
+      if (!response.ok || !data.payment) return null;
+      const next = data.payment as PaymentResponse;
+      setCurrentOrder((order) => order?.id === orderId
+        ? {
+            ...order,
+            payment_method: next.method,
+            payment_status: next.status,
+            payment_paid_at: next.paidAt,
+          }
+        : order);
+      return next;
+    } catch {
+      return null;
+    }
+  };
+
+  const waitForPaymentConfirmation = async (orderId: string): Promise<PaymentResponse | null> => {
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      const paymentState = await refreshPaymentStatus(orderId);
+      if (paymentState?.status === 'Paid') return paymentState;
+      if (attempt < 5) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 1_000));
+      }
+    }
+    return null;
+  };
+
+  const launchPayMongoCheckout = async (order: OrderRow): Promise<void> => {
+    setPlacingOrder(true);
+    try {
+      const response = await apiFetch(`/service-requests/${order.id}/payment/checkout`, {
+        method: 'POST',
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(apiErrorMessage(data, 'Could not start online payment'));
+      }
+      const paymentState = data.payment as PaymentResponse;
+      if (paymentState.status === 'Paid') {
+        await refreshPaymentStatus(order.id);
+        setModal('confirmed');
+        return;
+      }
+      if (!paymentState.checkoutUrl) {
+        throw new Error('PayMongo did not return a checkout link');
+      }
+
+      await WebBrowser.openAuthSessionAsync(
+        paymentState.checkoutUrl,
+        'superkalan://payments/return',
+      );
+      const confirmed = await waitForPaymentConfirmation(order.id);
+      if (confirmed?.status === 'Paid') {
+        setModal('confirmed');
+      } else {
+        showToast('Payment is still awaiting confirmation. You can retry safely.');
+      }
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Could not start online payment');
+    } finally {
+      setPlacingOrder(false);
+    }
+  };
+
+  const handlePlaceOrder = async (): Promise<void> => {
+    if (currentOrder) {
+      if (
+        currentOrder.payment_method === 'PayMongo' &&
+        currentOrder.payment_status !== 'Paid'
+      ) {
+        await launchPayMongoCheckout(currentOrder);
+      } else {
+        setModal('confirmed');
+      }
+      return;
+    }
+    if (!selectedBranch || !address || !selectedProducts[0] || !session?.user) {
+      showToast('Select a branch, address, and cylinder first.');
+      return;
+    }
+    const normalizedContact = normalizePhMobile(customerContact);
+    if (!normalizedContact) {
+      showToast('Missing a valid mobile number in your profile.');
+      return;
+    }
+
+    setPlacingOrder(true);
+    try {
+      const payload = {
+        branchId: selectedBranch.id,
+        customerName,
+        customerContact: normalizedContact,
+        deliveryAddress: address.address,
+        cylinderSize: selectedProducts[0].product.id,
+        quantity: selectedProducts[0].quantity,
+        paymentMethod: payment === 'paymongo' ? 'PayMongo' : 'Cash on Delivery',
+      };
+      const response = await apiFetch('/service-requests/customer', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(apiErrorMessage(data, 'Failed to create order'));
+
+      const order = data.serviceRequest as OrderRow;
+      setCurrentOrder(order);
+      setOrderPlacedAt(new Date(order.requested_at));
+      if (order.payment_method === 'PayMongo') {
+        await launchPayMongoCheckout(order);
+      } else {
+        setModal('confirmed');
+      }
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Failed to create order');
+    } finally {
+      setPlacingOrder(false);
+    }
+  };
+
+  useEffect(() => {
+    if (
+      !currentOrder ||
+      currentOrder.payment_method !== 'PayMongo' ||
+      currentOrder.payment_status === 'Paid'
+    ) {
+      return;
+    }
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state !== 'active') return;
+      void refreshPaymentStatus(currentOrder.id).then((paymentState) => {
+        if (paymentState?.status === 'Paid') setModal('confirmed');
+      });
+    });
+    return () => subscription.remove();
+  }, [currentOrder?.id, currentOrder?.payment_method, currentOrder?.payment_status]);
+
   const headerTitle = step === 'track' ? 'Track my Order' : 'Request an Order';
   const scheduledLabel = scheduledDate && scheduledTime
     ? `${formatScheduleDate(scheduledDate)} • ${scheduledTime}`
@@ -911,14 +1069,14 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
     </View>
   );
 
-  const paymentLabel = payment === 'gcash' ? 'GCash  ••••6789' : payment === 'maya' ? 'Maya' : 'Cash';
+  const paymentLabel = payment === 'paymongo'
+    ? 'Online payment — GCash, Maya, or QR Ph'
+    : 'Cash on Delivery';
   const paymentIcon = (p: Payment, size = 24) =>
-    p === 'gcash' ? (
-      <Image source={images.gcash} style={{ width: 29, height: size }} resizeMode="contain" />
-    ) : p === 'maya' ? (
-      <Image source={images.maya} style={{ width: 56, height: 15 }} resizeMode="contain" />
+    p === 'paymongo' ? (
+      <Feather name="smartphone" size={size} color={colors.primary} />
     ) : (
-      <Feather name="credit-card" size={size} color={colors.primary} />
+      <Feather name="dollar-sign" size={size} color={colors.primary} />
     );
 
   /* ── Steps ── */
@@ -1292,6 +1450,17 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
         <View style={styles.payLeft}>{paymentIcon(payment)}<Text style={styles.sumValue}>{paymentLabel}</Text></View>
         <Pressable onPress={() => { setTempPayment(payment); setModal('payment'); }}><Text style={styles.miniLink}>See all</Text></Pressable>
       </View>
+      {currentOrder ? summaryRow(
+        'Payment status:',
+        currentOrder.payment_method === 'Cash on Delivery'
+          ? 'Cash on Delivery'
+          : currentOrder.payment_status === 'Paid'
+            ? 'Paid'
+            : currentOrder.payment_status === 'Pending'
+              ? 'Awaiting payment'
+              : 'Retry payment',
+        currentOrder.payment_status === 'Paid' ? colors.greenBright : undefined,
+      ) : null}
       <View style={styles.hair} />
 
       <View style={styles.sumSectionRow}>
@@ -1323,45 +1492,15 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
       <Pressable
         style={[styles.cta, placingOrder ? styles.ctaDisabled : null]}
         disabled={placingOrder}
-        onPress={() => {
-          void (async () => {
-            const placedAt = new Date();
-            setOrderPlacedAt(placedAt);
-            if (!selectedBranch || !address || !selectedProducts[0] || !session?.user) {
-              showToast('Select a branch, address, and cylinder first.');
-              return;
-            }
-            if (!customerContact || normalizePhMobile(customerContact) === null) {
-              showToast('Missing a valid mobile number in your profile.');
-              return;
-            }
-            setPlacingOrder(true);
-            try {
-              const payload = {
-                branchId: selectedBranch.id,
-                customerName,
-                customerContact: normalizePhMobile(customerContact),
-                deliveryAddress: address.address,
-                cylinderSize: selectedProducts[0].product.id,
-                quantity: selectedProducts[0].quantity,
-              };
-              const res = await apiFetch('/service-requests/customer', {
-                method: 'POST',
-                body: JSON.stringify(payload),
-              });
-              const data = await res.json();
-              if (!res.ok) throw new Error(apiErrorMessage(data, 'Failed to create order'));
-              setCurrentOrder(data.serviceRequest as OrderRow);
-              setModal('confirmed');
-            } catch (err) {
-              showToast(err instanceof Error ? err.message : 'Failed to create order');
-            } finally {
-              setPlacingOrder(false);
-            }
-          })();
-        }}
+        onPress={() => void handlePlaceOrder()}
       >
-        <Text style={styles.ctaText}>{placingOrder ? 'PLACING…' : 'PLACE ORDER'}</Text>
+        <Text style={styles.ctaText}>
+          {placingOrder
+            ? 'PROCESSING…'
+            : currentOrder?.payment_method === 'PayMongo' && currentOrder.payment_status !== 'Paid'
+              ? 'RETRY PAYMENT'
+              : 'PLACE ORDER'}
+        </Text>
       </Pressable>
     </View>
   );
@@ -1376,6 +1515,37 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
           {summaryRow('Time of Delivery:', currentOrder?.delivered_at ? new Date(currentOrder.delivered_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) : 'Just now')}
           {summaryRow('Driver:', riderName || 'Assigned Driver')}
           <Pressable style={[styles.cta, { marginTop: 12 }]} onPress={() => setFeedback('rider')}><Text style={styles.ctaText}>SUBMIT FEEDBACK</Text></Pressable>
+        </View>
+      );
+    }
+
+    if (
+      currentOrder?.payment_method === 'PayMongo' &&
+      currentOrder.payment_status !== 'Paid'
+    ) {
+      return (
+        <View style={{ paddingHorizontal: 24 }}>
+          <View style={styles.orderPillWrap}>
+            <View style={styles.orderPill}>
+              <Text style={styles.orderPillText}>
+                ORDER# {currentOrder.id.slice(0, 8).toUpperCase()}
+              </Text>
+            </View>
+          </View>
+          <View style={styles.confirmCircle}>
+            <Feather name="clock" size={46} color="#fff" />
+          </View>
+          <Text style={styles.trackDone}>Awaiting payment</Text>
+          <Text style={[styles.trackNotify, { textAlign: 'center', marginBottom: 18 }]}>
+            Your Service Request is saved, but it cannot be dispatched until PayMongo confirms payment.
+          </Text>
+          <Pressable
+            style={[styles.cta, placingOrder ? styles.ctaDisabled : null]}
+            disabled={placingOrder}
+            onPress={() => void launchPayMongoCheckout(currentOrder)}
+          >
+            <Text style={styles.ctaText}>{placingOrder ? 'CHECKING…' : 'RETRY PAYMENT'}</Text>
+          </Pressable>
         </View>
       );
     }
@@ -1883,10 +2053,17 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
             <Text style={styles.sheetTitle}>Select Payment Method</Text>
             <Pressable onPress={() => setModal('none')} hitSlop={8}><Feather name="x" size={16} color={colors.gray} /></Pressable>
           </View>
-          {(['gcash', 'maya', 'cash'] as Payment[]).map((p) => (
+          {(['paymongo', 'cash'] as Payment[]).map((p) => (
             <Pressable key={p} style={styles.payOption} onPress={() => setTempPayment(p)}>
               <View style={styles.payOptionIcon}>{paymentIcon(p)}</View>
-              <Text style={[styles.sumValue, { flex: 1 }]}>{p === 'gcash' ? 'GCash •••• 6789' : p === 'maya' ? 'Maya' : 'Cash'}</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.sumValue}>
+                  {p === 'paymongo' ? 'Online payment' : 'Cash on Delivery'}
+                </Text>
+                {p === 'paymongo' ? (
+                  <Text style={styles.metaText}>Pay securely with GCash, Maya, or QR Ph</Text>
+                ) : null}
+              </View>
               <Ionicons name={tempPayment === p ? 'radio-button-on' : 'radio-button-off'} size={18} color={tempPayment === p ? colors.primary : colors.gray} />
             </Pressable>
           ))}

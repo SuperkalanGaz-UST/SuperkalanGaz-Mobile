@@ -102,6 +102,10 @@ export function HomeScreen({
   const [guideStep, setGuideStep] = useState(0);
   const [guideRect, setGuideRect] = useState<GuideRect | null>(null);
   const commercial = accountType === 'commercial';
+  const commercialPurchaseCount = 23;
+  const commercialPurchaseTarget = 30;
+  const commercialPurchasesRemaining = commercialPurchaseTarget - commercialPurchaseCount;
+  const commercialProgress = `${(commercialPurchaseCount / commercialPurchaseTarget) * 100}%`;
   const metadata = session?.user.user_metadata;
   const firstName = metadata?.first_name;
   const lastName = metadata?.last_name;
@@ -278,30 +282,38 @@ export function HomeScreen({
               onPress={() => openRewards('my')}
             >
               <View style={styles.heroCopy}>
-                <View style={styles.heroValueRow}>
-                  <Text style={[styles.heroValue, commercial && styles.heroValueCommercial]}>
-                    {commercial ? '24 / 30' : '163'}
-                  </Text>
-                  <Text style={[styles.heroUnit, commercial && styles.heroUnitCommercial]}>
-                    {commercial ? 'orders' : 'points'}
-                  </Text>
-                </View>
-                <Text style={styles.heroLabel}>
-                  {commercial ? 'Commercial 30+1 reward' : 'Household rewards'}
-                </Text>
-                <View style={styles.heroProgressBlock}>
-                  <Text style={styles.heroProgressLabel}>
-                    {commercial ? '6 orders to free cylinder' : '37 points to next reward'}
-                  </Text>
-                  <View style={styles.heroProgressTrack}>
-                    <View
-                      style={[
-                        styles.heroProgressFill,
-                        { width: commercial ? '80%' : '45%' },
-                      ]}
-                    />
-                  </View>
-                </View>
+                {commercial ? (
+                  <>
+                    <Text style={styles.heroLabel}>Commercial reward</Text>
+                    <View style={styles.heroValueRow}>
+                      <Text style={[styles.heroValue, styles.heroValueCommercial]}>
+                        {commercialPurchaseCount} / {commercialPurchaseTarget}
+                      </Text>
+                    </View>
+                    <View style={[styles.heroProgressBlock, styles.heroProgressBlockCommercial]}>
+                      <Text style={styles.heroProgressLabel}>
+                        {commercialPurchasesRemaining} more purchases to your free cylinder
+                      </Text>
+                      <View style={styles.heroProgressTrack}>
+                        <View style={[styles.heroProgressFill, { width: commercialProgress }]} />
+                      </View>
+                    </View>
+                  </>
+                ) : (
+                  <>
+                    <View style={styles.heroValueRow}>
+                      <Text style={styles.heroValue}>163</Text>
+                      <Text style={styles.heroUnit}>points</Text>
+                    </View>
+                    <Text style={styles.heroLabel}>Household rewards</Text>
+                    <View style={styles.heroProgressBlock}>
+                      <Text style={styles.heroProgressLabel}>37 points to next reward</Text>
+                      <View style={styles.heroProgressTrack}>
+                        <View style={[styles.heroProgressFill, { width: '45%' }]} />
+                      </View>
+                    </View>
+                  </>
+                )}
               </View>
             </Pressable>
             <View
@@ -516,11 +528,11 @@ const styles = StyleSheet.create({
   heroCopy: { width: '100%' },
   heroValueRow: { flexDirection: 'row', alignItems: 'baseline', gap: 8 },
   heroValue: { fontFamily: fonts.bold, fontSize: 38, lineHeight: 46, color: '#fff' },
-  heroValueCommercial: { fontSize: 30, lineHeight: 40 },
+  heroValueCommercial: { fontSize: 34, lineHeight: 42, marginTop: 2 },
   heroUnit: { fontFamily: fonts.semibold, fontSize: 16, color: '#fff' },
-  heroUnitCommercial: { fontSize: 13 },
   heroLabel: { fontFamily: fonts.semibold, fontSize: 14, color: '#fff', marginTop: 2 },
   heroProgressBlock: { marginTop: 30, width: '95%' },
+  heroProgressBlockCommercial: { marginTop: 18 },
   heroProgressLabel: { fontFamily: fonts.medium, fontSize: 10, color: '#fff', marginBottom: 7 },
   heroProgressTrack: {
     height: 4,

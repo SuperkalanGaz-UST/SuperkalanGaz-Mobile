@@ -5,17 +5,22 @@ import { colors } from '@/theme/colors';
 import { fonts } from '@/theme/fonts';
 import { cardShadow, radii } from '@/theme/metrics';
 import { images } from '@/lib/assets';
+import { useAuth } from '@/contexts/AuthContext';
 
 /**
  * Rewards surface (Figma "MyRewards / AllRewards / ActiveCodes"). Rendered inside
  * Home when the Rewards tab is active, so it shares Home's header + bottom nav.
  *
- * SCAFFOLD: points, history, and redemption codes are Figma mock data. Wire to
- * the Loyalty (LPM) endpoints — Household points ledger, 12-month expiry, and the
- * BM dual-authorization redemption gate (AGENTS.md §8a) — when they land.
+ * SCAFFOLD: reward progress, history, and redemption codes are mock data. Wire
+ * each account type to its separate Loyalty endpoint when those endpoints land.
  */
 type Sub = 'my' | 'all' | 'activeCodes';
 type Reward = { name: string; shortName: string; pts: number; img: number };
+type CommercialHistoryRow = {
+  type: 'purchase' | 'reward';
+  label: string;
+  date: string;
+};
 
 const POINTS = 163;
 const REWARD_ITEMS: Reward[] = [
@@ -32,6 +37,18 @@ const HISTORY = [
 ];
 const ACTIVE_CODE = { shortName: 'Free Notebook and Pen', pts: 10, img: images.rewardNotebook, code: 'SG-1234', validUntil: '10-10-2025' };
 
+// Keep these mock values aligned with the commercial summary on Home until the
+// purchase-count ledger is available from the Loyalty API.
+const COMMERCIAL_PURCHASE_COUNT = 23;
+const COMMERCIAL_PURCHASE_TARGET = 30;
+const COMMERCIAL_HISTORY: CommercialHistoryRow[] = [
+  { type: 'purchase', label: 'Qualifying purchase', date: '2025-05-02' },
+  { type: 'purchase', label: 'Qualifying purchase', date: '2025-04-18' },
+  { type: 'reward', label: 'Free cylinder claimed', date: '2025-03-12' },
+  { type: 'purchase', label: 'Qualifying purchase', date: '2025-02-27' },
+  { type: 'purchase', label: 'Qualifying purchase', date: '2025-02-10' },
+];
+
 function RewardCard({ item, onPress, dim }: { item: Reward; onPress?: () => void; dim?: boolean }) {
   return (
     <Pressable style={[styles.rewardCard, dim && { opacity: 0.3 }]} onPress={onPress} disabled={!onPress}>
@@ -44,12 +61,143 @@ function RewardCard({ item, onPress, dim }: { item: Reward; onPress?: () => void
   );
 }
 
+function CommercialRewardsScreen({ onExit }: { onExit: () => void }) {
+  const [showAllHistory, setShowAllHistory] = useState(false);
+  const remaining = Math.max(0, COMMERCIAL_PURCHASE_TARGET - COMMERCIAL_PURCHASE_COUNT);
+  const progressWidth: `${number}%` = `${Math.min(
+    100,
+    (COMMERCIAL_PURCHASE_COUNT / COMMERCIAL_PURCHASE_TARGET) * 100,
+  )}%`;
+  const history = showAllHistory ? COMMERCIAL_HISTORY : COMMERCIAL_HISTORY.slice(0, 3);
+
+  return (
+    <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.commercialPad}>
+      <View style={styles.titleRow}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Back to Home"
+          onPress={onExit}
+          hitSlop={8}
+        >
+          <Feather name="chevron-left" size={24} color={colors.heading} />
+        </Pressable>
+        <Text style={styles.commercialTitle}>Commercial Rewards</Text>
+      </View>
+
+      <View style={styles.commercialSummary}>
+        <Text style={styles.commercialCount}>
+          {COMMERCIAL_PURCHASE_COUNT}{' '}
+          <Text style={styles.commercialCountOf}>of {COMMERCIAL_PURCHASE_TARGET}</Text>
+        </Text>
+        <Text style={styles.commercialCountLabel}>qualifying purchases</Text>
+        <View
+          accessible
+          accessibilityRole="progressbar"
+          accessibilityLabel={`${COMMERCIAL_PURCHASE_COUNT} of ${COMMERCIAL_PURCHASE_TARGET} qualifying purchases`}
+          style={styles.commercialProgressTrack}
+        >
+          <View style={[styles.commercialProgressFill, { width: progressWidth }]} />
+        </View>
+        <Text style={styles.commercialRemaining}>{remaining} purchases remaining</Text>
+        <Text
+          adjustsFontSizeToFit
+          minimumFontScale={0.85}
+          numberOfLines={1}
+          style={styles.commercialDescription}
+        >
+          Complete 30 qualifying purchases to earn 1 free cylinder.
+        </Text>
+        <Text
+          adjustsFontSizeToFit
+          minimumFontScale={0.85}
+          numberOfLines={1}
+          style={styles.commercialApprovalNote}
+        >
+          Branch Manager approval applies when Dual Authorization is on.
+        </Text>
+      </View>
+
+      <View style={styles.commercialDivider} />
+
+      <View style={styles.commercialSectionRow}>
+        <Text style={styles.commercialSectionTitle}>Purchase Progress</Text>
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => setShowAllHistory((current) => !current)}
+          hitSlop={8}
+        >
+          <Text style={styles.link}>{showAllHistory ? 'Show Less' : 'View All'}</Text>
+        </Pressable>
+      </View>
+
+      {history.map((row, index) => (
+        <View key={`${row.type}-${row.date}`}>
+          <View style={styles.commercialHistoryRow}>
+            <View
+              style={[
+                styles.commercialHistoryIcon,
+                row.type === 'reward' && styles.commercialRewardHistoryIcon,
+              ]}
+            >
+              <Feather
+                name={row.type === 'purchase' ? 'check' : 'award'}
+                size={16}
+                color={row.type === 'purchase' ? '#fff' : colors.gray}
+              />
+            </View>
+            <View style={styles.commercialHistoryCopy}>
+              <Text style={styles.commercialHistoryLabel}>{row.label}</Text>
+              <Text style={styles.commercialHistoryDate}>{row.date}</Text>
+            </View>
+            <Text
+              style={[
+                styles.commercialHistoryValue,
+                row.type === 'reward' && styles.commercialRewardHistoryValue,
+              ]}
+            >
+              {row.type === 'purchase' ? '+1' : 'Claimed'}
+            </Text>
+          </View>
+          {index < history.length - 1 && <View style={styles.hair} />}
+        </View>
+      ))}
+
+      <Text style={styles.commercialRewardTitle}>Your Reward</Text>
+      <View style={styles.commercialRewardCard}>
+        <Text style={styles.commercialRewardName}>1 free cylinder</Text>
+        <Text style={styles.commercialRewardDescription}>
+          Available after 30 qualifying purchases
+        </Text>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityState={{ disabled: remaining > 0 }}
+          disabled={remaining > 0}
+          style={styles.commercialRewardButton}
+        >
+          <Text style={styles.commercialRewardButtonText}>
+            {remaining > 0 ? `${remaining} purchases remaining` : 'Reward available'}
+          </Text>
+        </Pressable>
+      </View>
+    </ScrollView>
+  );
+}
+
 export function RewardsScreen({ onExit, initialSub = 'my' }: { onExit: () => void; initialSub?: Sub }) {
+  const { accountType } = useAuth();
   const [sub, setSub] = useState<Sub>(initialSub);
   const [redeemItem, setRedeemItem] = useState<Reward | null>(null);
   const [successCode, setSuccessCode] = useState<string | null>(null);
   const [viewCode, setViewCode] = useState(false);
   const [codeConfirmed, setCodeConfirmed] = useState(false);
+
+  if (accountType === 'commercial') {
+    return (
+      <View style={styles.sheet}>
+        <CommercialRewardsScreen onExit={onExit} />
+      </View>
+    );
+  }
 
   return (
     <View style={styles.sheet}>
@@ -267,6 +415,124 @@ const styles = StyleSheet.create({
   ptsPill: { borderWidth: 1, borderColor: colors.primary, borderRadius: radii.card, paddingHorizontal: 12, paddingVertical: 2, marginBottom: 8 },
   ptsPillText: { fontFamily: fonts.medium, fontSize: 10, color: colors.label },
   rewardName: { fontFamily: fonts.semibold, fontSize: 9, color: colors.label, textAlign: 'center' },
+
+  commercialPad: { paddingHorizontal: 24, paddingTop: 20, paddingBottom: 130 },
+  commercialTitle: { flex: 1, fontFamily: fonts.semibold, fontSize: 20, color: colors.label },
+  commercialSummary: { marginTop: 28 },
+  commercialCount: {
+    fontFamily: fonts.semibold,
+    fontSize: 44,
+    lineHeight: 52,
+    color: colors.primary,
+  },
+  commercialCountOf: { fontSize: 28 },
+  commercialCountLabel: {
+    fontFamily: fonts.semibold,
+    fontSize: 17,
+    color: colors.label,
+    marginTop: -2,
+  },
+  commercialProgressTrack: {
+    height: 10,
+    overflow: 'hidden',
+    borderRadius: 5,
+    backgroundColor: colors.inputBorder,
+    marginTop: 20,
+  },
+  commercialProgressFill: {
+    height: '100%',
+    borderRadius: 5,
+    backgroundColor: colors.primary,
+  },
+  commercialRemaining: {
+    fontFamily: fonts.medium,
+    fontSize: 13,
+    color: colors.label,
+    marginTop: 8,
+  },
+  commercialDescription: {
+    fontFamily: fonts.regular,
+    fontSize: 11,
+    lineHeight: 16,
+    color: colors.label,
+    marginTop: 16,
+  },
+  commercialApprovalNote: {
+    fontFamily: fonts.regular,
+    fontSize: 10,
+    lineHeight: 15,
+    color: colors.grayText,
+    marginTop: 5,
+  },
+  commercialDivider: { height: 1, backgroundColor: colors.cardBorder, marginTop: 22 },
+  commercialSectionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 20,
+    marginBottom: 4,
+  },
+  commercialSectionTitle: { fontFamily: fonts.semibold, fontSize: 18, color: colors.label },
+  commercialHistoryRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    minHeight: 72,
+    paddingVertical: 10,
+  },
+  commercialHistoryIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.greenBright,
+  },
+  commercialRewardHistoryIcon: { backgroundColor: colors.redeemPale },
+  commercialHistoryCopy: { flex: 1 },
+  commercialHistoryLabel: { fontFamily: fonts.medium, fontSize: 14, color: colors.label },
+  commercialHistoryDate: {
+    fontFamily: fonts.regular,
+    fontSize: 11,
+    color: colors.grayText,
+    marginTop: 2,
+  },
+  commercialHistoryValue: { fontFamily: fonts.semibold, fontSize: 15, color: colors.primary },
+  commercialRewardHistoryValue: { fontFamily: fonts.medium, fontSize: 12, color: colors.grayText },
+  commercialRewardTitle: {
+    fontFamily: fonts.semibold,
+    fontSize: 18,
+    color: colors.label,
+    marginTop: 24,
+    marginBottom: 12,
+  },
+  commercialRewardCard: {
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+    borderRadius: radii.card,
+    padding: 16,
+  },
+  commercialRewardName: { fontFamily: fonts.semibold, fontSize: 16, color: colors.label },
+  commercialRewardDescription: {
+    fontFamily: fonts.regular,
+    fontSize: 12,
+    lineHeight: 18,
+    color: colors.grayText,
+    marginTop: 3,
+  },
+  commercialRewardButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 44,
+    borderRadius: radii.button,
+    backgroundColor: colors.redeemPale,
+    marginTop: 16,
+  },
+  commercialRewardButtonText: {
+    fontFamily: fonts.semibold,
+    fontSize: 13,
+    color: colors.disabledGray,
+  },
 
   sheetBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.3)' },
   bottomSheet: { backgroundColor: '#fff', borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingHorizontal: 24, paddingTop: 24, paddingBottom: 40 },

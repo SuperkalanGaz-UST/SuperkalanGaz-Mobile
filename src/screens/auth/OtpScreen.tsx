@@ -8,6 +8,8 @@ import { fonts } from '@/theme/fonts';
 import { DarkButton, OtpInput } from '@/components/ui/controls';
 import type { OtpVariant, SignupDraft } from '@/navigation/types';
 
+const RESEND_COOLDOWN_SECONDS = 60;
+
 const TITLES: Record<OtpVariant, string> = {
   email: "We've sent a code to your email!",
   phone: "We've sent a code to your phone number!",
@@ -38,6 +40,7 @@ export function OtpScreen({
   const [digits, setDigits] = useState<string[]>(Array(6).fill(''));
   const [busy, setBusy] = useState(false);
   const [resending, setResending] = useState(false);
+  const [resendCooldown, setResendCooldown] = useState(RESEND_COOLDOWN_SECONDS);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const filled = digits.every((d) => d !== '');
@@ -49,6 +52,14 @@ export function OtpScreen({
     });
     return () => subscription.remove();
   }, [onBack]);
+
+  useEffect(() => {
+    if (resendCooldown <= 0) return;
+    const timer = setTimeout(() => {
+      setResendCooldown((seconds) => Math.max(0, seconds - 1));
+    }, 1_000);
+    return () => clearTimeout(timer);
+  }, [resendCooldown]);
 
   const handleVerify = async () => {
     if (!filled || !draft) return;
@@ -65,7 +76,7 @@ export function OtpScreen({
   };
 
   const handleResend = async () => {
-    if (!draft || resending) return;
+    if (!draft || resending || resendCooldown > 0) return;
     setResending(true);
     setError('');
     setNotice('');
@@ -76,6 +87,7 @@ export function OtpScreen({
       return;
     }
     setDigits(Array(6).fill(''));
+    setResendCooldown(RESEND_COOLDOWN_SECONDS);
     setNotice('A new code has been sent.');
   };
 
@@ -102,11 +114,15 @@ export function OtpScreen({
       <Text style={styles.resend}>
         Didn't get the code?{' '}
         <Text
-          style={styles.resendLink}
-          onPress={() => void handleResend()}
+          style={[styles.resendLink, resendCooldown > 0 && styles.resendLinkDisabled]}
+          onPress={resendCooldown === 0 && !resending ? () => void handleResend() : undefined}
           suppressHighlighting
         >
-          {resending ? 'Sending…' : 'Resend code'}
+          {resending
+            ? 'Sending…'
+            : resendCooldown > 0
+              ? `Resend code in ${resendCooldown}s`
+              : 'Resend code'}
         </Text>
       </Text>
 
@@ -131,4 +147,5 @@ const styles = StyleSheet.create({
   notice: { fontFamily: fonts.regular, fontSize: 12, color: colors.success, textAlign: 'center', marginBottom: 12 },
   resend: { textAlign: 'center', fontFamily: fonts.regular, fontSize: 11, color: colors.grayText },
   resendLink: { color: colors.signupLink, textDecorationLine: 'underline' },
+  resendLinkDisabled: { color: colors.grayText, textDecorationLine: 'none' },
 });
