@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Image, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Feather, Ionicons } from '@expo/vector-icons';
+import * as WebBrowser from 'expo-web-browser';
 import { colors } from '@/theme/colors';
 import { fonts } from '@/theme/fonts';
 import { cardShadow, radii } from '@/theme/metrics';
@@ -31,7 +32,19 @@ type OrderRow = {
   dispatched_at: string | null;
   delivered_at: string | null;
   total_amount: number | null;
+  payment_method: 'Cash on Delivery' | 'PayMongo';
+  payment_status: 'Unpaid' | 'Pending' | 'Paid';
+  payment_paid_at: string | null;
 };
+
+type PaymentResponse = {
+  method: OrderRow['payment_method'];
+  status: OrderRow['payment_status'];
+  paidAt: string | null;
+  checkoutUrl?: string | null;
+};
+
+WebBrowser.maybeCompleteAuthSession();
 
 function Stars({ value, onRate }: { value: number; onRate: (n: number) => void }) {
   return (
@@ -53,25 +66,29 @@ export function OrdersScreen({ onNavigate }: { onNavigate: (screen: MainScreen, 
   const [orders, setOrders] = useState<OrderRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [paymentMessage, setPaymentMessage] = useState<string | null>(null);
+  const [retryingOrderId, setRetryingOrderId] = useState<string | null>(null);
+  const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
+
+  const loadOrders = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await apiFetch('/service-requests/me');
+      const data = await res.json();
+      if (!res.ok) throw new Error(apiErrorMessage(data, 'Failed to load orders'));
+      setOrders((data.serviceRequests as OrderRow[]) ?? []);
+    } catch (err) {
+      setOrders([]);
+      setError(err instanceof Error ? err.message : 'Failed to load orders');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    const loadOrders = async () => {
-      setLoading(true);
-      setError(null);
-      try {
-        const res = await apiFetch('/service-requests/me');
-        const data = await res.json();
-        if (!res.ok) throw new Error(apiErrorMessage(data, 'Failed to load orders'));
-        setOrders((data.serviceRequests as OrderRow[]) ?? []);
-      } catch (err) {
-        setOrders([]);
-        setError(err instanceof Error ? err.message : 'Failed to load orders');
-      } finally {
-        setLoading(false);
-      }
-    };
     void loadOrders();
-  }, []);
+  }, [loadOrders]);
 
   const activeOrders = useMemo(
     () => orders.filter((order) => order.status !== 'Delivered' && order.status !== 'Cancelled'),
@@ -88,6 +105,65 @@ export function OrdersScreen({ onNavigate }: { onNavigate: (screen: MainScreen, 
   const formatDate = (iso: string) => new Intl.DateTimeFormat('en-PH', { month: 'long', day: 'numeric', year: 'numeric' }).format(new Date(iso));
 
   const showFeedback = sub === 'feedback-rate' || sub === 'feedback-comment';
+  const detailOrder = orders.find((order) => order.id === selectedOrderId) ?? orders[0];
+
+  const updatePayment = (orderId: string, payment: PaymentResponse) => {
+    setOrders((current) => current.map((order) => order.id === orderId
+      ? {
+          ...order,
+          payment_method: payment.method,
+          payment_status: payment.status,
+          payment_paid_at: payment.paidAt,
+        }
+      : order));
+  };
+
+  const refreshPayment = async (orderId: string): Promise<PaymentResponse | null> => {
+    const response = await apiFetch(`/service-requests/${orderId}/payment?_t=${Date.now()}`, {
+      cache: 'no-store',
+      headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' },
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(apiErrorMessage(data, 'Could not confirm payment'));
+    const payment = data.payment as PaymentResponse;
+    updatePayment(orderId, payment);
+    return payment;
+  };
+
+  const retryPayment = async (order: OrderRow) => {
+    if (retryingOrderId) return;
+    setRetryingOrderId(order.id);
+    setPaymentMessage(null);
+    try {
+      const response = await apiFetch(`/service-requests/${order.id}/payment/checkout`, {
+        method: 'POST',
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(apiErrorMessage(data, 'Could not start online payment'));
+      const payment = data.payment as PaymentResponse;
+      updatePayment(order.id, payment);
+      if (payment.status === 'Paid') {
+        setPaymentMessage('Payment confirmed.');
+        return;
+      }
+      if (!payment.checkoutUrl) throw new Error('PayMongo did not return a checkout link');
+
+      await WebBrowser.openAuthSessionAsync(payment.checkoutUrl, 'superkalan://payments/return');
+      for (let attempt = 0; attempt < 6; attempt += 1) {
+        const confirmed = await refreshPayment(order.id);
+        if (confirmed?.status === 'Paid') {
+          setPaymentMessage('Payment confirmed.');
+          return;
+        }
+        if (attempt < 5) await new Promise<void>((resolve) => setTimeout(resolve, 1_000));
+      }
+      setPaymentMessage('Payment is still awaiting confirmation. You can retry safely.');
+    } catch (err) {
+      setPaymentMessage(err instanceof Error ? err.message : 'Could not start online payment');
+    } finally {
+      setRetryingOrderId(null);
+    }
+  };
 
   const orderCard = (o: OrderRow, past: boolean) => (
     <View key={o.id} style={styles.orderCard}>
@@ -103,11 +179,27 @@ export function OrdersScreen({ onNavigate }: { onNavigate: (screen: MainScreen, 
           <Text style={styles.cylQty}>Qty: {o.quantity}</Text>
           <Text style={styles.cylPrice}>{formatMoney(o.total_amount)}</Text>
           <Text style={styles.orderStatus}>Status: {o.status}</Text>
+          <Text style={styles.orderStatus}>
+            Payment: {o.payment_method === 'Cash on Delivery'
+              ? 'Cash on Delivery'
+              : o.payment_status === 'Paid' ? 'Paid' : 'Awaiting payment'}
+          </Text>
+          {o.payment_method === 'PayMongo' && o.payment_status !== 'Paid' && (
+            <Pressable
+              style={[styles.retryPaymentBtn, retryingOrderId !== null && styles.disabledBtn]}
+              disabled={retryingOrderId !== null}
+              onPress={() => void retryPayment(o)}
+            >
+              <Text style={styles.retryPaymentText}>
+                {retryingOrderId === o.id ? 'Opening PayMongo…' : 'Retry payment'}
+              </Text>
+            </Pressable>
+          )}
         </View>
       </View>
-      <View style={[styles.orderFooter, { height: past ? 50 : 30 }]}>
+      <View style={[styles.orderFooter, { height: past ? 50 : 30 }]}> 
         <View>
-          <Pressable onPress={() => setSub('details')}>
+          <Pressable onPress={() => { setSelectedOrderId(o.id); setSub('details'); }}>
             <Text style={styles.footerLink}>View Order Details</Text>
           </Pressable>
           <Text style={styles.footerDate}>Order Date: {formatDate(o.requested_at)}</Text>
@@ -141,6 +233,7 @@ export function OrdersScreen({ onNavigate }: { onNavigate: (screen: MainScreen, 
           </View>
         </View>
         <View style={{ paddingTop: 16 }}>
+          {paymentMessage && <Text style={styles.paymentMessage}>{paymentMessage}</Text>}
           {loading ? (
             <View style={styles.empty}>
               <View style={styles.emptyBox}>
@@ -180,37 +273,55 @@ export function OrdersScreen({ onNavigate }: { onNavigate: (screen: MainScreen, 
       </View>
       <View style={{ paddingHorizontal: 20 }}>
         <View style={styles.orderPill}>
-          <Text style={styles.orderPillText}>ORDER# {orders[0]?.id.slice(0, 8).toUpperCase() ?? 'PENDING'}</Text>
+          <Text style={styles.orderPillText}>ORDER# {detailOrder?.id.slice(0, 8).toUpperCase() ?? 'PENDING'}</Text>
         </View>
         <Text style={styles.helpLink}>Get help with this order</Text>
-        <Text style={styles.metaText}>Order Date: {orders[0] ? new Intl.DateTimeFormat('en-PH', { month: 'long', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(orders[0].requested_at)) : '—'}</Text>
+        <Text style={styles.metaText}>Order Date: {detailOrder ? new Intl.DateTimeFormat('en-PH', { month: 'long', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(detailOrder.requested_at)) : '—'}</Text>
 
         <View style={styles.locRow}>
           <Feather name="map-pin" size={24} color={colors.primary} />
           <View>
             <Text style={styles.locLabel}>Ordered From</Text>
-            <Text style={styles.locValue}>{orders[0]?.branch_id ?? 'Your selected branch'}</Text>
+            <Text style={styles.locValue}>{detailOrder?.branch_id ?? 'Your selected branch'}</Text>
           </View>
         </View>
         <View style={styles.locRow}>
           <Feather name="map-pin" size={24} color="#CFCFCF" />
           <View>
             <Text style={styles.locLabel}>Delivery Address</Text>
-            <Text style={styles.locValue}>{orders[0]?.delivery_address ?? '—'}</Text>
+            <Text style={styles.locValue}>{detailOrder?.delivery_address ?? '—'}</Text>
           </View>
         </View>
         <View style={[styles.locRow, { alignItems: 'center' }]}>
           <Feather name="credit-card" size={24} color={colors.primary} />
-          <Text style={styles.locValue}>Cash On Delivery</Text>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.locValue}>{detailOrder?.payment_method ?? 'Cash on Delivery'}</Text>
+            <Text style={styles.metaText}>
+              {detailOrder?.payment_method === 'PayMongo'
+                ? detailOrder.payment_status === 'Paid' ? 'Paid' : 'Awaiting payment'
+                : detailOrder?.payment_status === 'Paid' ? 'Paid on delivery' : 'Pay on delivery'}
+            </Text>
+            {detailOrder?.payment_method === 'PayMongo' && detailOrder.payment_status !== 'Paid' && (
+              <Pressable
+                style={[styles.retryPaymentBtn, retryingOrderId !== null && styles.disabledBtn]}
+                disabled={retryingOrderId !== null}
+                onPress={() => void retryPayment(detailOrder)}
+              >
+                <Text style={styles.retryPaymentText}>
+                  {retryingOrderId === detailOrder.id ? 'Opening PayMongo…' : 'Retry payment'}
+                </Text>
+              </Pressable>
+            )}
+          </View>
         </View>
       </View>
 
       <View style={styles.productCard}>
-        <Image source={cylinderFor(orders[0]?.cylinder_size ?? '11 KG')} style={{ width: 82, height: 120, marginHorizontal: 24 }} resizeMode="contain" />
+        <Image source={cylinderFor(detailOrder?.cylinder_size ?? '11 KG')} style={{ width: 82, height: 120, marginHorizontal: 24 }} resizeMode="contain" />
         <View style={styles.productInfo}>
-          <Text style={styles.productSize}>{orders[0]?.cylinder_size ?? '11 KG'}</Text>
-          <Text style={styles.cylQty}>Qty: {orders[0]?.quantity ?? 1}</Text>
-          <Text style={styles.productPrice}>{formatMoney(orders[0]?.total_amount ?? null)}</Text>
+          <Text style={styles.productSize}>{detailOrder?.cylinder_size ?? '11 KG'}</Text>
+          <Text style={styles.cylQty}>Qty: {detailOrder?.quantity ?? 1}</Text>
+          <Text style={styles.productPrice}>{formatMoney(detailOrder?.total_amount ?? null)}</Text>
         </View>
       </View>
     </View>
@@ -310,6 +421,10 @@ const styles = StyleSheet.create({
   cylQty: { fontFamily: fonts.medium, fontSize: 12, color: colors.grayText },
   cylPrice: { fontFamily: fonts.semibold, fontSize: 20, color: colors.primary },
   orderStatus: { fontFamily: fonts.medium, fontSize: 11, color: colors.grayText },
+  retryPaymentBtn: { alignSelf: 'flex-start', marginTop: 5, borderRadius: radii.chip, backgroundColor: colors.primary, paddingHorizontal: 10, paddingVertical: 5 },
+  retryPaymentText: { fontFamily: fonts.semibold, fontSize: 11, color: '#fff' },
+  disabledBtn: { opacity: 0.55 },
+  paymentMessage: { marginHorizontal: 20, marginBottom: 12, fontFamily: fonts.medium, fontSize: 12, color: colors.primary },
   orderFooter: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 12, backgroundColor: colors.activeFooter },
   footerLink: { fontFamily: fonts.semibold, fontSize: 12, color: colors.heading },
   footerDate: { fontFamily: fonts.medium, fontSize: 10, color: colors.grayText },
