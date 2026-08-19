@@ -96,6 +96,61 @@ export function HomeScreen({
     return () => clearInterval(interval);
   }, []);
 
+  // Sync Loyalty State
+  const [points, setPoints] = useState(0);
+  const [catalog, setCatalog] = useState<any[]>([]);
+  const [history, setHistory] = useState<any[]>([]);
+  const [activeCodes, setActiveCodes] = useState<any[]>([]);
+  const [loyaltyError, setLoyaltyError] = useState<string | null>(null);
+
+  const loadLoyalty = async () => {
+    if (accountType !== 'household') return;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    try {
+      const [catResult, meResult] = await Promise.allSettled([
+        apiFetch('/loyalty/catalog', { signal: controller.signal }),
+        apiFetch('/loyalty/me', { signal: controller.signal }),
+      ]);
+      clearTimeout(timeout);
+
+      const errors: string[] = [];
+
+      if (catResult.status === 'fulfilled' && catResult.value.ok) {
+        const catData = await catResult.value.json();
+        setCatalog(catData.catalogItems || []);
+      } else if (catResult.status === 'fulfilled') {
+        errors.push(`Catalog ${catResult.value.status}`);
+      } else {
+        errors.push('Catalog unreachable');
+      }
+
+      if (meResult.status === 'fulfilled' && meResult.value.ok) {
+        const meData = await meResult.value.json();
+        setPoints(meData.pointsBalance || 0);
+        setHistory(meData.householdTransactions || []);
+        setActiveCodes(meData.activeRedemptions || []);
+      } else if (meResult.status === 'fulfilled') {
+        errors.push(`Rewards ${meResult.value.status}`);
+      } else {
+        errors.push('Rewards unavailable');
+      }
+
+      setLoyaltyError(errors.length > 0 ? errors.join(', ') : null);
+    } catch (e: unknown) {
+      clearTimeout(timeout);
+      console.error('Failed to load loyalty data:', e);
+      setLoyaltyError('Rewards temporarily unavailable');
+    }
+  };
+
+  useEffect(() => {
+    loadLoyalty();
+    // Poll every 15s so points refresh automatically after a delivery completes
+    const interval = setInterval(loadLoyalty, 15_000);
+    return () => clearInterval(interval);
+  }, [accountType]);
+
   const [activeTab, setActiveTab] = useState<MainTab>(initialTab);
   const [rewardsSub, setRewardsSub] = useState<'my' | 'all'>('my');
   const [guideOpen, setGuideOpen] = useState(showGuide);
@@ -212,7 +267,16 @@ export function HomeScreen({
             onHelp={openGuide}
             onProfile={() => onNavigate('profile', { profileSection: 'personal' })}
           />
-          <RewardsScreen initialSub={rewardsSub} onExit={() => setActiveTab('home')} />
+          <RewardsScreen 
+            initialSub={rewardsSub} 
+            onExit={() => setActiveTab('home')} 
+            points={points}
+            catalog={catalog}
+            history={history}
+            activeCodes={activeCodes}
+            loyaltyError={loyaltyError}
+            onRefresh={loadLoyalty}
+          />
         </>
       ) : (
         <ScrollView
@@ -302,14 +366,14 @@ export function HomeScreen({
                 ) : (
                   <>
                     <View style={styles.heroValueRow}>
-                      <Text style={styles.heroValue}>163</Text>
+                      <Text style={styles.heroValue}>{points}</Text>
                       <Text style={styles.heroUnit}>points</Text>
                     </View>
                     <Text style={styles.heroLabel}>Household rewards</Text>
                     <View style={styles.heroProgressBlock}>
-                      <Text style={styles.heroProgressLabel}>37 points to next reward</Text>
+                      <Text style={styles.heroProgressLabel}>{points > 0 ? 'Use points for rewards' : 'Earn points with every delivery'}</Text>
                       <View style={styles.heroProgressTrack}>
-                        <View style={[styles.heroProgressFill, { width: '45%' }]} />
+                        <View style={[styles.heroProgressFill, { width: points > 0 ? '100%' : '0%' }]} />
                       </View>
                     </View>
                   </>

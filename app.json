@@ -26,8 +26,7 @@
         {
           "locationWhenInUsePermission": "Allow Superkalan Gaz to use your location to pin a delivery address."
         }
-      ],
-      "expo-web-browser"
+      ]
     ]
   }
 }

@@ -24,6 +24,7 @@ import {
   type CustomerAddressRow,
   type SaveCustomerAddressInput,
 } from '@/lib/customerAddresses';
+import { CYLINDER_POINTS } from '@/lib/cylinderPoints';
 
 /**
  * Order flow (Figma "OrderProcess"): delivery address + branch → product select
@@ -303,8 +304,8 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
   const [address, setAddress] = useState<SavedAddress | null>(initialAddress);
   const [branches, setBranches] = useState<BranchOption[]>([]);
   const [selectedBranch, setSelectedBranch] = useState<BranchOption | null>(null);
-  const [payment, setPayment] = useState<Payment>('paymongo');
-  const [tempPayment, setTempPayment] = useState<Payment>('paymongo');
+  const [payment, setPayment] = useState<Payment>('cash');
+  const [tempPayment, setTempPayment] = useState<Payment>('cash');
   const [delivered, setDelivered] = useState(false);
   const [feedback, setFeedback] = useState<FeedbackStep>('none');
   const [riderRating, setRiderRating] = useState(0);
@@ -1486,7 +1487,7 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
 
       <Text style={styles.sumSection}>Cost & Loyalty Rewards</Text>
       {summaryRow('Estimated Cost:', `₱ ${total.toLocaleString()}`)}
-      {summaryRow('Loyalty Points:', '+50 pts', colors.greenBright)}
+      {summaryRow('Loyalty Points:', `+${(CYLINDER_POINTS[selectedProducts[0]?.product.id ?? ''] ?? 0) * (selectedProducts[0]?.quantity ?? 1)} pts`, colors.greenBright)}
       <View style={styles.hair} />
 
       <Pressable
@@ -2215,18 +2216,6 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
             <View style={styles.sheetBackdrop} />
             <View style={styles.feedbackSheet}>
               <Pressable style={styles.confirmClose} onPress={() => setFeedback('xfeedback')} hitSlop={8}><Feather name="x" size={16} color={colors.gray} /></Pressable>
-              <Pressable
-                style={[styles.cta, { width: '80%' }]}
-                onPress={() => {
-                  showToast('Feedback submitted successfully. +50 pts!');
-                  setFeedback('none');
-                  onNavigate('home', { tab: 'rewards' });
-                }}
-              >
-                <Text style={styles.ctaText}>SUBMIT FEEDBACK</Text>
-                <View style={styles.pdash} />
-                <View style={[styles.pdot, feedback === 'rider' && { backgroundColor: colors.cardBorder }]} />
-              </Pressable>
               {feedback === 'rider' && (
                 <View style={styles.fbAvatarWrap}><View style={styles.fbAvatar}><Feather name="user" size={52} color="#fff" /></View></View>
               )}
@@ -2242,7 +2231,11 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
                 style={[styles.cta, { marginTop: 16 }]}
                 onPress={() => {
                   if (feedback === 'rider') setFeedback('store');
-                  else { setFeedback('none'); showToast('Thank you for your feedback!'); }
+                  else {
+                    showToast(`Feedback submitted successfully. +${CYLINDER_POINTS[currentOrder?.cylinder_size ?? ''] ?? 0} pts!`);
+                    setFeedback('none');
+                    onNavigate('home');
+                  }
                 }}
               >
                 <Text style={styles.ctaText}>{feedback === 'rider' ? 'Next' : 'Submit Feedback'}</Text>

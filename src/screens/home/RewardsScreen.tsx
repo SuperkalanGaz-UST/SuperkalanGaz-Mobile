@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Image, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { colors } from '@/theme/colors';
@@ -6,13 +6,11 @@ import { fonts } from '@/theme/fonts';
 import { cardShadow, radii } from '@/theme/metrics';
 import { images } from '@/lib/assets';
 import { useAuth } from '@/contexts/AuthContext';
+import { apiFetch, apiErrorMessage } from '@/lib/api';
 
 /**
  * Rewards surface (Figma "MyRewards / AllRewards / ActiveCodes"). Rendered inside
  * Home when the Rewards tab is active, so it shares Home's header + bottom nav.
- *
- * SCAFFOLD: reward progress, history, and redemption codes are mock data. Wire
- * each account type to its separate Loyalty endpoint when those endpoints land.
  */
 type Sub = 'my' | 'all' | 'activeCodes';
 type Reward = { name: string; shortName: string; pts: number; img: number };
@@ -22,20 +20,39 @@ type CommercialHistoryRow = {
   date: string;
 };
 
-const POINTS = 163;
-const REWARD_ITEMS: Reward[] = [
-  { name: 'Get Free Notebook and pen for 10 Points', shortName: 'Free Notebook and Pen', pts: 10, img: images.rewardNotebook },
-  { name: 'Get Free Desk Calendar for 20 Points', shortName: 'Get Your Free Desk Calendar', pts: 20, img: images.rewardCalendar },
-  { name: 'Get Free Umbrella for 30 Points', shortName: 'Get Your Free Umbrella', pts: 30, img: images.rewardUmbrella },
-  { name: 'Get Free Mug for 40 Points', shortName: 'Get Your Free Mug', pts: 40, img: images.rewardMug },
-];
-const HISTORY = [
-  { type: 'Earned', pts: '+10', date: '2025-01-02' },
-  { type: 'Earned', pts: '+10', date: '2024-12-23' },
-  { type: 'Used', pts: '-10', date: '2024-11-10' },
-  { type: 'Earned', pts: '+10', date: '2024-10-15' },
-];
-const ACTIVE_CODE = { shortName: 'Free Notebook and Pen', pts: 10, img: images.rewardNotebook, code: 'SG-1234', validUntil: '10-10-2025' };
+type CatalogItem = {
+  id: string;
+  name: string;
+  points_cost: number;
+};
+type HistoryRow = {
+  id: string;
+  type: string;
+  points_delta: number;
+  created_at: string;
+};
+type ActiveRedemption = {
+  id: string;
+  catalog_item_name: string | null;
+  points_spent: number | null;
+  redemption_code: string | null;
+  status: string;
+};
+
+/** Map reward catalog names to bundled images. Falls back to notebook. */
+const REWARD_IMAGES: Record<string, number> = {
+  notebook: images.rewardNotebook,
+  calendar: images.rewardCalendar,
+  umbrella: images.rewardUmbrella,
+  mug: images.rewardMug,
+};
+function rewardImageFor(name: string): number {
+  const lower = name.toLowerCase();
+  for (const [key, img] of Object.entries(REWARD_IMAGES)) {
+    if (lower.includes(key)) return img;
+  }
+  return images.rewardNotebook;
+}
 
 // Keep these mock values aligned with the commercial summary on Home until the
 // purchase-count ledger is available from the Loyalty API.
@@ -183,13 +200,58 @@ function CommercialRewardsScreen({ onExit }: { onExit: () => void }) {
   );
 }
 
-export function RewardsScreen({ onExit, initialSub = 'my' }: { onExit: () => void; initialSub?: Sub }) {
+export function RewardsScreen({ 
+  onExit, 
+  initialSub = 'my',
+  points,
+  catalog,
+  history,
+  activeCodes,
+  loyaltyError,
+  onRefresh,
+}: { 
+  onExit: () => void; 
+  initialSub?: Sub;
+  points: number;
+  catalog: CatalogItem[];
+  history: HistoryRow[];
+  activeCodes: ActiveRedemption[];
+  loyaltyError: string | null;
+  onRefresh: () => void;
+}) {
   const { accountType } = useAuth();
   const [sub, setSub] = useState<Sub>(initialSub);
-  const [redeemItem, setRedeemItem] = useState<Reward | null>(null);
+  const [redeemItem, setRedeemItem] = useState<CatalogItem | null>(null);
   const [successCode, setSuccessCode] = useState<string | null>(null);
-  const [viewCode, setViewCode] = useState(false);
+  const [viewCodeItem, setViewCodeItem] = useState<ActiveRedemption | null>(null);
   const [codeConfirmed, setCodeConfirmed] = useState(false);
+
+  const [loading, setLoading] = useState(false);
+  const [redeemError, setRedeemError] = useState<string | null>(null);
+
+  const handleRedeem = async () => {
+    if (!redeemItem) return;
+    setRedeemError(null);
+    setLoading(true);
+    try {
+      const res = await apiFetch('/loyalty/me/redemptions', {
+        method: 'POST',
+        body: JSON.stringify({ catalogItemId: redeemItem.id }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        const msg = apiErrorMessage(data, 'Redemption failed');
+        setRedeemError(msg);
+      } else {
+        setSuccessCode(data.redemption?.redemption_code || '—');
+        onRefresh();
+      }
+    } catch (e) {
+      setRedeemError('Network error. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   if (accountType === 'commercial') {
     return (
@@ -210,7 +272,16 @@ export function RewardsScreen({ onExit, initialSub = 'my' }: { onExit: () => voi
             </Pressable>
             <Text style={styles.title}>My Rewards</Text>
           </View>
-          <Text style={styles.pointsBig}>{POINTS} points</Text>
+          {loyaltyError ? (
+            <View style={styles.errorBanner}>
+              <Feather name="alert-circle" size={16} color="#fff" />
+              <Text style={styles.errorBannerText}>{loyaltyError}</Text>
+              <Pressable onPress={onRefresh} hitSlop={8}>
+                <Text style={styles.errorBannerRetry}>Retry</Text>
+              </Pressable>
+            </View>
+          ) : null}
+          <Text style={styles.pointsBig}>{points} points</Text>
           <Text style={styles.blurb}>
             Earn more points from ordering at Superkalan Gaz branches. Expect your points to reflect
             within 24 hours. Points expire 12 months after they were earned.
@@ -222,38 +293,56 @@ export function RewardsScreen({ onExit, initialSub = 'my' }: { onExit: () => voi
               <Text style={styles.link}>View All</Text>
             </Pressable>
           </View>
-          {HISTORY.map((row, i) => (
-            <View key={i}>
-              <View style={styles.histRow}>
-                <Feather
-                  name={row.type === 'Used' ? 'arrow-down' : 'arrow-up'}
-                  size={18}
-                  color={row.type === 'Used' ? colors.danger : colors.greenBright}
-                />
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.histType}>{row.type}</Text>
-                  <Text style={styles.histDate}>{row.date}</Text>
-                </View>
-                <Text style={styles.histPts}>{row.pts}</Text>
-              </View>
-              {i < HISTORY.length - 1 && <View style={styles.hair} />}
+          {history.length === 0 ? (
+            <View style={{ paddingVertical: 24, alignItems: 'center' }}>
+              <Text style={{ fontFamily: fonts.medium, color: colors.grayText, fontSize: 14 }}>
+                No points history yet. Order LPG to start earning!
+              </Text>
             </View>
-          ))}
+          ) : (
+            history.slice(0, 4).map((row, i) => (
+              <View key={row.id}>
+                <View style={styles.histRow}>
+                  <Feather
+                    name={row.type === 'redeem' ? 'arrow-down' : 'arrow-up'}
+                    size={18}
+                    color={row.type === 'redeem' ? colors.danger : colors.greenBright}
+                  />
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.histType}>{row.type === 'earn' ? 'Earned' : 'Used'}</Text>
+                    <Text style={styles.histDate}>{new Date(row.created_at).toLocaleDateString()}</Text>
+                  </View>
+                  <Text style={styles.histPts}>
+                    {row.type === 'earn' ? '+' : '-'}{Math.abs(row.points_delta)}
+                  </Text>
+                </View>
+                {i < Math.min(history.length, 4) - 1 && <View style={styles.hair} />}
+              </View>
+            ))
+          )}
 
           <Text style={[styles.title, { marginTop: 24, marginBottom: 12 }]}>Claim Your Reward!</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 12 }}>
-            {REWARD_ITEMS.map((item) => (
-              <View key={item.pts} style={{ width: 146 }}>
-                <RewardCard
-                  item={item}
-                  onPress={() => {
-                    setSub('all');
-                    setRedeemItem(item);
-                  }}
-                />
-              </View>
-            ))}
-          </ScrollView>
+          {catalog.length === 0 ? (
+            <View style={{ paddingVertical: 24, alignItems: 'center' }}>
+              <Text style={{ fontFamily: fonts.regular, fontSize: 14, color: colors.grayText }}>No rewards available yet. Check back soon!</Text>
+            </View>
+          ) : (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 12 }}>
+              {catalog.map((item) => (
+                <View key={item.id} style={{ width: 146 }}>
+                  <RewardCard
+                    item={{ name: item.name, shortName: item.name, pts: item.points_cost, img: rewardImageFor(item.name) }}
+                    dim={item.points_cost > points}
+                    onPress={() => {
+                      if (item.points_cost > points) return;
+                      setSub('all');
+                      setRedeemItem(item);
+                    }}
+                  />
+                </View>
+              ))}
+            </ScrollView>
+          )}
         </ScrollView>
       )}
 
@@ -267,16 +356,29 @@ export function RewardsScreen({ onExit, initialSub = 'my' }: { onExit: () => voi
               </Pressable>
               <Text style={styles.title}>All Rewards</Text>
             </View>
-            <Text style={styles.title}>{POINTS} pts</Text>
+            <Text style={styles.title}>{points} pts</Text>
           </View>
           <Text style={styles.redeemHead}>Redeem with your points</Text>
-          <View style={styles.grid}>
-            {REWARD_ITEMS.map((item) => (
-              <View key={item.pts} style={styles.gridItem}>
-                <RewardCard item={item} onPress={() => setRedeemItem(item)} />
-              </View>
-            ))}
-          </View>
+          {catalog.length === 0 ? (
+            <View style={{ paddingVertical: 32, alignItems: 'center' }}>
+              <Text style={{ fontFamily: fonts.regular, fontSize: 14, color: colors.grayText }}>No rewards available yet. Check back soon!</Text>
+            </View>
+          ) : (
+            <View style={styles.grid}>
+              {catalog.map((item) => (
+                <View key={item.id} style={styles.gridItem}>
+                  <RewardCard
+                    item={{ name: item.name, shortName: item.name, pts: item.points_cost, img: rewardImageFor(item.name) }}
+                    dim={item.points_cost > points}
+                    onPress={() => {
+                      if (item.points_cost > points) return;
+                      setRedeemItem(item);
+                    }}
+                  />
+                </View>
+              ))}
+            </View>
+          )}
         </ScrollView>
       )}
 
@@ -285,52 +387,62 @@ export function RewardsScreen({ onExit, initialSub = 'my' }: { onExit: () => voi
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.pad}>
           <View style={styles.titleRowBetween}>
             <View style={styles.titleRow}>
-              <Pressable onPress={() => { setSub('all'); setViewCode(false); setCodeConfirmed(false); }} hitSlop={8}>
+              <Pressable onPress={() => { setSub('all'); setViewCodeItem(null); setCodeConfirmed(false); }} hitSlop={8}>
                 <Feather name="chevron-left" size={24} color={colors.heading} />
               </Pressable>
               <Text style={styles.title}>All Rewards</Text>
             </View>
-            <Text style={styles.title}>{POINTS} pts</Text>
+            <Text style={styles.title}>{points} pts</Text>
           </View>
           <Text style={styles.redeemHead}>Redeem with your points</Text>
           <View style={styles.grid}>
-            {REWARD_ITEMS.map((item) => (
-              <View key={item.pts} style={styles.gridItem}>
-                <RewardCard item={item} dim={item.pts === 10} />
+            {catalog.map((item) => (
+              <View key={item.id} style={styles.gridItem}>
+                <RewardCard item={{ name: item.name, shortName: item.name, pts: item.points_cost, img: rewardImageFor(item.name) }} dim={item.points_cost > points} />
               </View>
             ))}
           </View>
           <Text style={[styles.redeemHead, { marginTop: 24 }]}>My Active Codes</Text>
-          <View style={{ width: 146 }}>
-            <Pressable
-              style={[styles.rewardCard, codeConfirmed && { opacity: 0.3 }]}
-              onPress={() => !codeConfirmed && setViewCode(true)}
-            >
-              <Image source={ACTIVE_CODE.img} style={styles.rewardImg} resizeMode="contain" />
-              <View style={styles.ptsPill}>
-                <Text style={styles.ptsPillText}>{ACTIVE_CODE.pts} pts</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 12 }}>
+            {activeCodes.map((code) => (
+              <View key={code.id} style={{ width: 146 }}>
+                <Pressable
+                  style={[styles.rewardCard, codeConfirmed && { opacity: 0.3 }]}
+                  onPress={() => !codeConfirmed && setViewCodeItem(code)}
+                >
+                  <Image source={rewardImageFor(code.catalog_item_name || '')} style={styles.rewardImg} resizeMode="contain" />
+                  <View style={styles.ptsPill}>
+                    <Text style={styles.ptsPillText}>{code.points_spent} pts</Text>
+                  </View>
+                  <Text style={[styles.rewardName, { color: colors.grayText }]}>Status: {code.status}</Text>
+                </Pressable>
               </View>
-              <Text style={[styles.rewardName, { color: colors.grayText }]}>Valid until: {ACTIVE_CODE.validUntil}</Text>
-            </Pressable>
-          </View>
+            ))}
+          </ScrollView>
         </ScrollView>
       )}
 
       {/* Redeem confirm sheet */}
-      <Modal visible={!!redeemItem && !successCode} transparent animationType="slide" onRequestClose={() => setRedeemItem(null)}>
-        <Pressable style={styles.sheetBackdrop} onPress={() => setRedeemItem(null)} />
+      <Modal visible={!!redeemItem && !successCode} transparent animationType="slide" onRequestClose={() => { setRedeemItem(null); setRedeemError(null); }}>
+        <Pressable style={styles.sheetBackdrop} onPress={() => { setRedeemItem(null); setRedeemError(null); }} />
         <View style={styles.bottomSheet}>
           <View style={styles.sheetHead}>
-            <Text style={styles.sheetTitle}>{redeemItem?.shortName}</Text>
-            <Pressable onPress={() => setRedeemItem(null)} hitSlop={8}>
+            <Text style={styles.sheetTitle}>{redeemItem?.name}</Text>
+            <Pressable onPress={() => { setRedeemItem(null); setRedeemError(null); }} hitSlop={8}>
               <Feather name="x" size={18} color={colors.gray} />
             </Pressable>
           </View>
           <View style={[styles.ptsPill, { alignSelf: 'flex-start', marginBottom: 20 }]}>
-            <Text style={styles.ptsPillText}>{redeemItem?.pts} pts</Text>
+            <Text style={styles.ptsPillText}>{redeemItem?.points_cost} pts</Text>
           </View>
-          <Pressable style={styles.solidBtn} onPress={() => setSuccessCode('SG-1234')}>
-            <Text style={styles.solidBtnText}>REDEEM</Text>
+          {redeemError ? (
+            <View style={{ backgroundColor: '#FEF2F2', borderRadius: 8, padding: 12, marginBottom: 16, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <Feather name="alert-circle" size={16} color={colors.danger} />
+              <Text style={{ fontFamily: fonts.regular, fontSize: 13, color: colors.danger, flex: 1 }}>{redeemError}</Text>
+            </View>
+          ) : null}
+          <Pressable style={styles.solidBtn} onPress={handleRedeem} disabled={loading}>
+            <Text style={styles.solidBtnText}>{loading ? 'REDEEMING...' : 'REDEEM'}</Text>
           </Pressable>
         </View>
       </Modal>
@@ -359,23 +471,23 @@ export function RewardsScreen({ onExit, initialSub = 'my' }: { onExit: () => voi
       </Modal>
 
       {/* View code sheet */}
-      <Modal visible={viewCode} transparent animationType="slide" onRequestClose={() => setViewCode(false)}>
-        <Pressable style={styles.sheetBackdrop} onPress={() => setViewCode(false)} />
+      <Modal visible={!!viewCodeItem} transparent animationType="slide" onRequestClose={() => setViewCodeItem(null)}>
+        <Pressable style={styles.sheetBackdrop} onPress={() => setViewCodeItem(null)} />
         <View style={styles.bottomSheet}>
           <View style={styles.sheetHead}>
             <View>
-              <Text style={styles.sheetTitle}>{ACTIVE_CODE.shortName}</Text>
-              <Text style={styles.codeBig}>{ACTIVE_CODE.code}</Text>
+              <Text style={styles.sheetTitle}>{viewCodeItem?.catalog_item_name}</Text>
+              <Text style={styles.codeBig}>{viewCodeItem?.redemption_code || '—'}</Text>
             </View>
-            <Pressable onPress={() => setViewCode(false)} hitSlop={8}>
+            <Pressable onPress={() => setViewCodeItem(null)} hitSlop={8}>
               <Feather name="x" size={18} color={colors.gray} />
             </Pressable>
           </View>
           <View style={[styles.ptsPill, { alignSelf: 'flex-start', marginBottom: 20 }]}>
-            <Text style={styles.ptsPillText}>{ACTIVE_CODE.pts} pts</Text>
+            <Text style={styles.ptsPillText}>{viewCodeItem?.points_spent} pts</Text>
           </View>
-          <Pressable style={styles.solidBtn} onPress={() => { setViewCode(false); setCodeConfirmed(true); }}>
-            <Text style={styles.solidBtnText}>CONFIRM REDEMPTION</Text>
+          <Pressable style={styles.solidBtn} onPress={() => { setViewCodeItem(null); setCodeConfirmed(true); }}>
+            <Text style={styles.solidBtnText}>DONE</Text>
           </Pressable>
         </View>
       </Modal>
@@ -415,6 +527,19 @@ const styles = StyleSheet.create({
   ptsPill: { borderWidth: 1, borderColor: colors.primary, borderRadius: radii.card, paddingHorizontal: 12, paddingVertical: 2, marginBottom: 8 },
   ptsPillText: { fontFamily: fonts.medium, fontSize: 10, color: colors.label },
   rewardName: { fontFamily: fonts.semibold, fontSize: 9, color: colors.label, textAlign: 'center' },
+
+  errorBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#E53935',
+    borderRadius: radii.card,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginTop: 8,
+  },
+  errorBannerText: { flex: 1, fontFamily: fonts.medium, fontSize: 12, color: '#fff' },
+  errorBannerRetry: { fontFamily: fonts.semibold, fontSize: 12, color: '#fff', textDecorationLine: 'underline' },
 
   commercialPad: { paddingHorizontal: 24, paddingTop: 20, paddingBottom: 130 },
   commercialTitle: { flex: 1, fontFamily: fonts.semibold, fontSize: 20, color: colors.label },
