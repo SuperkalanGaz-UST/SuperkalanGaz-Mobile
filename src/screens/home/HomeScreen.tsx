@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Image,
   type LayoutChangeEvent,
@@ -31,8 +31,8 @@ import type { MainNavigateOptions, MainScreen, MainTab } from '@/navigation/type
  * reorder shelf. The Rewards tab swaps the body for the Rewards surface
  * while keeping this header + bottom nav.
  *
- * SCAFFOLD: greeting name, points, and orders are Figma mock data — wire to the
- * session profile + SRD/LPM endpoints (AGENTS.md) when available.
+ * Greeting, Service Request milestones, and the account's track-specific loyalty
+ * summary are loaded from the authenticated session and NestJS API.
  */
 // App-guide step → the Home element it spotlights (null = full dim). Kept in sync
 // with the copy in `AppGuide.tsx` STEPS by index.
@@ -40,6 +40,38 @@ const GUIDE_TARGETS = [null, 'rewards', 'active', 'reorder', 'quick', 'nav', 'he
 
 /** Minimal instance shape we need off a ref, given the degraded RN types. */
 type Measurable = { measureInWindow: (cb: (x: number, y: number, w: number, h: number) => void) => void };
+
+type LoyaltyCatalogItem = { id: string; branch_id: string; name: string; points_cost: number };
+type HouseholdAccountRow = { branch_id: string; points_balance: number };
+type HouseholdHistoryRow = { id: string; type: string; points_delta: number; created_at: string };
+type LoyaltyRedemptionRow = {
+  id: string;
+  catalog_item_name: string | null;
+  points_spent: number | null;
+  redemption_code: string | null;
+  status: string;
+};
+type CommercialAccountRow = {
+  branch_id: string;
+  branch_name: string | null;
+  current_cycle_count: number;
+  completed_cycles: number;
+};
+type CommercialPurchaseRow = {
+  id: string;
+  service_request_id: string;
+  cycle_number: number;
+  counted_at: string;
+  created_at: string;
+};
+type CustomerLoyaltyPayload = {
+  points_balance?: number;
+  household_transactions?: HouseholdHistoryRow[];
+  household_accounts?: HouseholdAccountRow[];
+  commercial_accounts?: CommercialAccountRow[];
+  commercial_purchases?: CommercialPurchaseRow[];
+  active_redemptions?: LoyaltyRedemptionRow[];
+};
 
 export function HomeScreen({
   initialTab = 'home',
@@ -98,13 +130,16 @@ export function HomeScreen({
 
   // Sync Loyalty State
   const [points, setPoints] = useState(0);
-  const [catalog, setCatalog] = useState<any[]>([]);
-  const [history, setHistory] = useState<any[]>([]);
-  const [activeCodes, setActiveCodes] = useState<any[]>([]);
+  const [catalog, setCatalog] = useState<LoyaltyCatalogItem[]>([]);
+  const [history, setHistory] = useState<HouseholdHistoryRow[]>([]);
+  const [householdAccounts, setHouseholdAccounts] = useState<HouseholdAccountRow[]>([]);
+  const [activeCodes, setActiveCodes] = useState<LoyaltyRedemptionRow[]>([]);
+  const [commercialAccounts, setCommercialAccounts] = useState<CommercialAccountRow[]>([]);
+  const [commercialPurchases, setCommercialPurchases] = useState<CommercialPurchaseRow[]>([]);
   const [loyaltyError, setLoyaltyError] = useState<string | null>(null);
 
-  const loadLoyalty = async () => {
-    if (accountType !== 'household') return;
+  const loadLoyalty = useCallback(async () => {
+    if (!accountType) return;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10000);
     try {
@@ -117,8 +152,8 @@ export function HomeScreen({
       const errors: string[] = [];
 
       if (catResult.status === 'fulfilled' && catResult.value.ok) {
-        const catData = await catResult.value.json();
-        setCatalog(catData.catalogItems || []);
+        const catData = (await catResult.value.json()) as { catalogItems?: LoyaltyCatalogItem[] };
+        setCatalog(catData.catalogItems ?? []);
       } else if (catResult.status === 'fulfilled') {
         errors.push(`Catalog ${catResult.value.status}`);
       } else {
@@ -126,10 +161,13 @@ export function HomeScreen({
       }
 
       if (meResult.status === 'fulfilled' && meResult.value.ok) {
-        const meData = await meResult.value.json();
-        setPoints(meData.pointsBalance || 0);
-        setHistory(meData.householdTransactions || []);
-        setActiveCodes(meData.activeRedemptions || []);
+        const meData = (await meResult.value.json()) as CustomerLoyaltyPayload;
+        setPoints(meData.points_balance ?? 0);
+        setHistory(meData.household_transactions ?? []);
+        setHouseholdAccounts(meData.household_accounts ?? []);
+        setCommercialAccounts(meData.commercial_accounts ?? []);
+        setCommercialPurchases(meData.commercial_purchases ?? []);
+        setActiveCodes(meData.active_redemptions ?? []);
       } else if (meResult.status === 'fulfilled') {
         errors.push(`Rewards ${meResult.value.status}`);
       } else {
@@ -142,14 +180,14 @@ export function HomeScreen({
       console.error('Failed to load loyalty data:', e);
       setLoyaltyError('Rewards temporarily unavailable');
     }
-  };
+  }, [accountType]);
 
   useEffect(() => {
     loadLoyalty();
     // Poll every 15s so points refresh automatically after a delivery completes
     const interval = setInterval(loadLoyalty, 15_000);
     return () => clearInterval(interval);
-  }, [accountType]);
+  }, [loadLoyalty]);
 
   const [activeTab, setActiveTab] = useState<MainTab>(initialTab);
   const [rewardsSub, setRewardsSub] = useState<'my' | 'all'>('my');
@@ -157,10 +195,17 @@ export function HomeScreen({
   const [guideStep, setGuideStep] = useState(0);
   const [guideRect, setGuideRect] = useState<GuideRect | null>(null);
   const commercial = accountType === 'commercial';
-  const commercialPurchaseCount = 23;
   const commercialPurchaseTarget = 30;
+  const commercialAccount = [...commercialAccounts].sort(
+    (a, b) =>
+      b.completed_cycles - a.completed_cycles ||
+      b.current_cycle_count - a.current_cycle_count,
+  )[0];
+  const commercialPurchaseCount = commercialAccount?.current_cycle_count ?? 0;
   const commercialPurchasesRemaining = commercialPurchaseTarget - commercialPurchaseCount;
-  const commercialProgress = `${(commercialPurchaseCount / commercialPurchaseTarget) * 100}%`;
+  const commercialProgress: `${number}%` = `${
+    (commercialPurchaseCount / commercialPurchaseTarget) * 100
+  }%`;
   const metadata = session?.user.user_metadata;
   const firstName = metadata?.first_name;
   const lastName = metadata?.last_name;
@@ -273,7 +318,10 @@ export function HomeScreen({
             points={points}
             catalog={catalog}
             history={history}
+            householdAccounts={householdAccounts}
             activeCodes={activeCodes}
+            commercialAccounts={commercialAccounts}
+            commercialPurchases={commercialPurchases}
             loyaltyError={loyaltyError}
             onRefresh={loadLoyalty}
           />

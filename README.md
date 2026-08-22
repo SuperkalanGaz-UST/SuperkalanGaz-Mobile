@@ -1,7 +1,7 @@
 # superkalan-crm-mobile
 
 Customer-only mobile app for the **Superkalan Gaz CRM** — Expo + React Native + TypeScript.
-Staff (FA/BO/BM) use the web dashboard; this app is **customers only** (AGENTS.md §2, §7).
+Staff (SA/FA/BO/BM) use the web dashboard; this app is **customers only** (AGENTS.md §2, §7).
 
 Scope (the 5 confirmed modules, customer slice):
 

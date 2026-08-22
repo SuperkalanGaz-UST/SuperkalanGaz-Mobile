@@ -25,7 +25,7 @@ constraints must never be violated.
 | Repo                   | Stack                     | Purpose                          |
 | ---------------------- | ------------------------- | -------------------------------- |
 | `superkalan-crm-api`   | NestJS + TypeScript       | Backend, business logic, data    |
-| `superkalan-crm-web`   | Next.js (React)           | Internal staff dashboard (FA/BO/BM) |
+| `superkalan-crm-web`   | Next.js (React)           | Internal staff dashboard (SA/FA/BO/BM) |
 | `SuperkalanGaz-Mobile` | React Native + Expo      | **Customer-only** mobile app     |
 
 Sections below are tagged `[api]`, `[web]`, `[mobile]`, or `[all]` where they apply.
@@ -88,6 +88,7 @@ Sections below are tagged `[api]`, `[web]`, `[mobile]`, or `[all]` where they ap
   comments matter — this is a panel-defense point.
 
 Scoping by role (see §7 for full permissions):
+- **SA:** cross-branch governance and audit read visibility (no operational writes).
 - **FA:** cross-branch read visibility (no operational writes).
 - **BO / BM:** strictly their own `branch_id`.
 - **Customer:** their own records only.
@@ -96,7 +97,7 @@ Scoping by role (see §7 for full permissions):
 
 ## 6. Database Conventions `[api]`
 
-- **7 schemas:** `core`, `cim`, `srd`, `fleet`, `loyalty`, `csat`, `inventory` (23 tables).
+- **7 schemas:** `core`, `cim`, `srd`, `fleet`, `loyalty`, `csat`, `inventory` (25 tables).
 - **UUID primary keys** everywhere.
 - **No foreign-key constraints in the schema.** Referential integrity is enforced in the
   **NestJS service layer**. When writing services, validate referenced records exist and
@@ -112,15 +113,24 @@ Scoping by role (see §7 for full permissions):
 
 | Role | Interface | Can do | Must NOT do |
 | ---- | --------- | ------ | ----------- |
-| **Franchise Administrator (FA)** | Web | Cross-branch read visibility; **set system-wide SLA thresholds (only FA may)**; manage branch accounts | Any operational write; process orders; dispatch; approve redemptions |
+| **Super Administrator (SA)** | Web | Top-level governance; approve or reject FA-submitted SLA-threshold, price-configuration, Branch Owner-reassignment, and FA-account-creation requests; review immutable price-change, Branch Owner-change, approval, and security activity logs; cross-branch read visibility | Submit or approve their own request; mutate audit history; perform operational writes; process service requests; dispatch; approve redemptions |
+| **Franchise Administrator (FA)** | Web | Cross-branch read visibility; submit system-wide SLA-threshold, price-configuration, Branch Owner-reassignment, and FA-account-creation requests for SA approval; perform initial branch and Branch Owner onboarding; manage other branch accounts | Approve governance requests or FA account creation; mutate audit history; perform operational writes; process service requests; dispatch; approve redemptions |
 | **Branch Owner (BO)** | Web | Configure **their branch only**: loyalty merchandise catalog, point rates, threshold values *within FA-set bounds*, Dual-Authorization toggle; view branch analytics | Process daily orders; dispatch; cross-branch access |
 | **Branch Manager (BM)** | Web | **Day-to-day ops for their branch:** create/process service requests, dispatch riders, approve loyalty redemptions | Change SLA thresholds; act outside own branch |
 | **Customer (CU)** | **Mobile only** | Place orders, track delivery status *milestones*, submit CSAT | Access web dashboard; see live GPS coordinates |
 
 Hard constraints:
 - **BO and BM are always separate people.** Do not merge these roles or share a session.
-- **FA has no operational write actions.** Its only writes are SLA-threshold config
-  (system-wide) and branch-account management.
+- **SA and FA are governance roles with no operational write actions.** FA proposes
+  system-wide SLA-threshold and price-configuration changes, Branch Owner reassignments,
+  and FA-account creation; SA makes the approval decision. Initial branch/Branch Owner
+  onboarding remains an FA action and must still be audited. Approved changes execute
+  through a separately authorized service path and remain attributable in the audit trail.
+- **No self-approval.** SA cannot create and approve the same governance request, and FA
+  cannot approve FA-account or configuration requests.
+- **Audit history is immutable to users.** Price changes, Branch Owner changes, FA account
+  creation events, and approval decisions must record actor, action, affected record,
+  before/after values where applicable, timestamp, and decision reason.
 - **Customers see delivery status milestones only — never live GPS coordinates.**
 
 ---
@@ -184,7 +194,9 @@ Management as practices this system implements. Vocabulary: "Service Request" (o
 
 - **"Centralized CRM" / "value-based CRM"** — **never "omnichannel."**
 - **"Branch Manager"** — never "Branch Head" / "Branch Administrator."
-- **"Franchise Administrator"** — the correct top-level role name.
+- **"Super Administrator"** — the correct top-level governance role name.
+- **"Franchise Administrator"** — the cross-branch administrative role below Super
+  Administrator; never shorten it to a generic "Admin" in role labels.
 - **SinoTrack ST-901 = hardware device.** **Traccar = self-hosted middleware** that consumes
   SinoTrack data. Never call Traccar the tracker, or vice versa.
 

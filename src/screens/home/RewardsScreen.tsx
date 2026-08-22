@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { Image, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { colors } from '@/theme/colors';
@@ -14,16 +14,25 @@ import { apiFetch, apiErrorMessage } from '@/lib/api';
  */
 type Sub = 'my' | 'all' | 'activeCodes';
 type Reward = { name: string; shortName: string; pts: number; img: number };
-type CommercialHistoryRow = {
-  type: 'purchase' | 'reward';
-  label: string;
-  date: string;
-};
-
 type CatalogItem = {
   id: string;
+  branch_id: string;
   name: string;
   points_cost: number;
+};
+type HouseholdAccount = { branch_id: string; points_balance: number };
+type CommercialAccount = {
+  branch_id: string;
+  branch_name: string | null;
+  current_cycle_count: number;
+  completed_cycles: number;
+};
+type CommercialPurchase = {
+  id: string;
+  service_request_id: string;
+  cycle_number: number;
+  counted_at: string;
+  created_at: string;
 };
 type HistoryRow = {
   id: string;
@@ -54,17 +63,7 @@ function rewardImageFor(name: string): number {
   return images.rewardNotebook;
 }
 
-// Keep these mock values aligned with the commercial summary on Home until the
-// purchase-count ledger is available from the Loyalty API.
-const COMMERCIAL_PURCHASE_COUNT = 23;
 const COMMERCIAL_PURCHASE_TARGET = 30;
-const COMMERCIAL_HISTORY: CommercialHistoryRow[] = [
-  { type: 'purchase', label: 'Qualifying purchase', date: '2025-05-02' },
-  { type: 'purchase', label: 'Qualifying purchase', date: '2025-04-18' },
-  { type: 'reward', label: 'Free cylinder claimed', date: '2025-03-12' },
-  { type: 'purchase', label: 'Qualifying purchase', date: '2025-02-27' },
-  { type: 'purchase', label: 'Qualifying purchase', date: '2025-02-10' },
-];
 
 function RewardCard({ item, onPress, dim }: { item: Reward; onPress?: () => void; dim?: boolean }) {
   return (
@@ -78,14 +77,59 @@ function RewardCard({ item, onPress, dim }: { item: Reward; onPress?: () => void
   );
 }
 
-function CommercialRewardsScreen({ onExit }: { onExit: () => void }) {
+function CommercialRewardsScreen({
+  onExit,
+  accounts,
+  purchases,
+  activeCodes,
+  loyaltyError,
+  onRefresh,
+}: {
+  onExit: () => void;
+  accounts: CommercialAccount[];
+  purchases: CommercialPurchase[];
+  activeCodes: ActiveRedemption[];
+  loyaltyError: string | null;
+  onRefresh: () => void;
+}) {
   const [showAllHistory, setShowAllHistory] = useState(false);
-  const remaining = Math.max(0, COMMERCIAL_PURCHASE_TARGET - COMMERCIAL_PURCHASE_COUNT);
+  const [redeeming, setRedeeming] = useState(false);
+  const [redeemError, setRedeemError] = useState<string | null>(null);
+  const account = [...accounts].sort(
+    (a, b) =>
+      b.completed_cycles - a.completed_cycles ||
+      b.current_cycle_count - a.current_cycle_count,
+  )[0];
+  const purchaseCount = account?.current_cycle_count ?? 0;
+  const remaining = Math.max(0, COMMERCIAL_PURCHASE_TARGET - purchaseCount);
   const progressWidth: `${number}%` = `${Math.min(
     100,
-    (COMMERCIAL_PURCHASE_COUNT / COMMERCIAL_PURCHASE_TARGET) * 100,
+    (purchaseCount / COMMERCIAL_PURCHASE_TARGET) * 100,
   )}%`;
-  const history = showAllHistory ? COMMERCIAL_HISTORY : COMMERCIAL_HISTORY.slice(0, 3);
+  const history = showAllHistory ? purchases : purchases.slice(0, 3);
+  const availableRewards = account?.completed_cycles ?? 0;
+
+  const requestReward = async () => {
+    if (!account || availableRewards < 1) return;
+    setRedeeming(true);
+    setRedeemError(null);
+    try {
+      const response = await apiFetch('/loyalty/me/commercial-redemptions', {
+        method: 'POST',
+        body: JSON.stringify({ branchId: account.branch_id }),
+      });
+      const data: unknown = await response.json().catch(() => null);
+      if (!response.ok) {
+        setRedeemError(apiErrorMessage(data, 'Could not request the free cylinder.'));
+        return;
+      }
+      onRefresh();
+    } catch {
+      setRedeemError('Rewards temporarily unavailable.');
+    } finally {
+      setRedeeming(false);
+    }
+  };
 
   return (
     <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.commercialPad}>
@@ -101,16 +145,19 @@ function CommercialRewardsScreen({ onExit }: { onExit: () => void }) {
         <Text style={styles.commercialTitle}>Commercial Rewards</Text>
       </View>
 
+      {loyaltyError ? <Text style={styles.commercialApprovalNote}>{loyaltyError}</Text> : null}
+
       <View style={styles.commercialSummary}>
         <Text style={styles.commercialCount}>
-          {COMMERCIAL_PURCHASE_COUNT}{' '}
+          {purchaseCount}{' '}
           <Text style={styles.commercialCountOf}>of {COMMERCIAL_PURCHASE_TARGET}</Text>
         </Text>
+        <Text style={styles.commercialCountLabel}>{account?.branch_name ?? 'No branch purchases yet'}</Text>
         <Text style={styles.commercialCountLabel}>qualifying purchases</Text>
         <View
           accessible
           accessibilityRole="progressbar"
-          accessibilityLabel={`${COMMERCIAL_PURCHASE_COUNT} of ${COMMERCIAL_PURCHASE_TARGET} qualifying purchases`}
+          accessibilityLabel={`${purchaseCount} of ${COMMERCIAL_PURCHASE_TARGET} qualifying purchases`}
           style={styles.commercialProgressTrack}
         >
           <View style={[styles.commercialProgressFill, { width: progressWidth }]} />
@@ -147,32 +194,32 @@ function CommercialRewardsScreen({ onExit }: { onExit: () => void }) {
         </Pressable>
       </View>
 
-      {history.map((row, index) => (
-        <View key={`${row.type}-${row.date}`}>
+      {history.length === 0 ? (
+        <Text style={styles.commercialHistoryDate}>No counted purchases yet.</Text>
+      ) : history.map((row, index) => (
+        <View key={row.id}>
           <View style={styles.commercialHistoryRow}>
             <View
               style={[
                 styles.commercialHistoryIcon,
-                row.type === 'reward' && styles.commercialRewardHistoryIcon,
               ]}
             >
               <Feather
-                name={row.type === 'purchase' ? 'check' : 'award'}
+                name="check"
                 size={16}
-                color={row.type === 'purchase' ? '#fff' : colors.gray}
+                color="#fff"
               />
             </View>
             <View style={styles.commercialHistoryCopy}>
-              <Text style={styles.commercialHistoryLabel}>{row.label}</Text>
-              <Text style={styles.commercialHistoryDate}>{row.date}</Text>
+              <Text style={styles.commercialHistoryLabel}>Qualifying purchase</Text>
+              <Text style={styles.commercialHistoryDate}>{new Date(row.counted_at).toLocaleDateString()}</Text>
             </View>
             <Text
               style={[
                 styles.commercialHistoryValue,
-                row.type === 'reward' && styles.commercialRewardHistoryValue,
               ]}
             >
-              {row.type === 'purchase' ? '+1' : 'Claimed'}
+              +1
             </Text>
           </View>
           {index < history.length - 1 && <View style={styles.hair} />}
@@ -183,18 +230,29 @@ function CommercialRewardsScreen({ onExit }: { onExit: () => void }) {
       <View style={styles.commercialRewardCard}>
         <Text style={styles.commercialRewardName}>1 free cylinder</Text>
         <Text style={styles.commercialRewardDescription}>
-          Available after 30 qualifying purchases
+          {availableRewards} free cylinder reward(s) available
         </Text>
+        {redeemError ? <Text style={styles.commercialApprovalNote}>{redeemError}</Text> : null}
         <Pressable
           accessibilityRole="button"
-          accessibilityState={{ disabled: remaining > 0 }}
-          disabled={remaining > 0}
+          accessibilityState={{ disabled: availableRewards < 1 || redeeming }}
+          disabled={availableRewards < 1 || redeeming}
           style={styles.commercialRewardButton}
+          onPress={requestReward}
         >
           <Text style={styles.commercialRewardButtonText}>
-            {remaining > 0 ? `${remaining} purchases remaining` : 'Reward available'}
+            {redeeming
+              ? 'Requesting…'
+              : availableRewards > 0
+                ? 'Request free cylinder'
+                : `${remaining} purchases remaining`}
           </Text>
         </Pressable>
+        {activeCodes.length > 0 ? (
+          <Text style={styles.commercialApprovalNote}>
+            {activeCodes.length} active commercial redemption(s)
+          </Text>
+        ) : null}
       </View>
     </ScrollView>
   );
@@ -206,7 +264,10 @@ export function RewardsScreen({
   points,
   catalog,
   history,
+  householdAccounts,
   activeCodes,
+  commercialAccounts,
+  commercialPurchases,
   loyaltyError,
   onRefresh,
 }: { 
@@ -215,7 +276,10 @@ export function RewardsScreen({
   points: number;
   catalog: CatalogItem[];
   history: HistoryRow[];
+  householdAccounts: HouseholdAccount[];
   activeCodes: ActiveRedemption[];
+  commercialAccounts: CommercialAccount[];
+  commercialPurchases: CommercialPurchase[];
   loyaltyError: string | null;
   onRefresh: () => void;
 }) {
@@ -223,11 +287,14 @@ export function RewardsScreen({
   const [sub, setSub] = useState<Sub>(initialSub);
   const [redeemItem, setRedeemItem] = useState<CatalogItem | null>(null);
   const [successCode, setSuccessCode] = useState<string | null>(null);
+  const [successPending, setSuccessPending] = useState(false);
   const [viewCodeItem, setViewCodeItem] = useState<ActiveRedemption | null>(null);
   const [codeConfirmed, setCodeConfirmed] = useState(false);
 
   const [loading, setLoading] = useState(false);
   const [redeemError, setRedeemError] = useState<string | null>(null);
+  const availableFor = (item: CatalogItem) =>
+    householdAccounts.find((account) => account.branch_id === item.branch_id)?.points_balance ?? 0;
 
   const handleRedeem = async () => {
     if (!redeemItem) return;
@@ -243,7 +310,9 @@ export function RewardsScreen({
         const msg = apiErrorMessage(data, 'Redemption failed');
         setRedeemError(msg);
       } else {
-        setSuccessCode(data.redemption?.redemption_code || '—');
+        const code = data.redemption?.redemption_code as string | null | undefined;
+        setSuccessPending(!code);
+        setSuccessCode(code ?? 'Awaiting Branch Manager approval');
         onRefresh();
       }
     } catch (e) {
@@ -256,7 +325,14 @@ export function RewardsScreen({
   if (accountType === 'commercial') {
     return (
       <View style={styles.sheet}>
-        <CommercialRewardsScreen onExit={onExit} />
+        <CommercialRewardsScreen
+          onExit={onExit}
+          accounts={commercialAccounts}
+          purchases={commercialPurchases}
+          activeCodes={activeCodes}
+          loyaltyError={loyaltyError}
+          onRefresh={onRefresh}
+        />
       </View>
     );
   }
@@ -332,9 +408,9 @@ export function RewardsScreen({
                 <View key={item.id} style={{ width: 146 }}>
                   <RewardCard
                     item={{ name: item.name, shortName: item.name, pts: item.points_cost, img: rewardImageFor(item.name) }}
-                    dim={item.points_cost > points}
+                    dim={item.points_cost > availableFor(item)}
                     onPress={() => {
-                      if (item.points_cost > points) return;
+                      if (item.points_cost > availableFor(item)) return;
                       setSub('all');
                       setRedeemItem(item);
                     }}
@@ -369,9 +445,9 @@ export function RewardsScreen({
                 <View key={item.id} style={styles.gridItem}>
                   <RewardCard
                     item={{ name: item.name, shortName: item.name, pts: item.points_cost, img: rewardImageFor(item.name) }}
-                    dim={item.points_cost > points}
+                    dim={item.points_cost > availableFor(item)}
                     onPress={() => {
-                      if (item.points_cost > points) return;
+                      if (item.points_cost > availableFor(item)) return;
                       setRedeemItem(item);
                     }}
                   />
@@ -398,11 +474,11 @@ export function RewardsScreen({
           <View style={styles.grid}>
             {catalog.map((item) => (
               <View key={item.id} style={styles.gridItem}>
-                <RewardCard item={{ name: item.name, shortName: item.name, pts: item.points_cost, img: rewardImageFor(item.name) }} dim={item.points_cost > points} />
+                <RewardCard item={{ name: item.name, shortName: item.name, pts: item.points_cost, img: rewardImageFor(item.name) }} dim={item.points_cost > availableFor(item)} />
               </View>
             ))}
           </View>
-          <Text style={[styles.redeemHead, { marginTop: 24 }]}>My Active Codes</Text>
+          <Text style={[styles.redeemHead, { marginTop: 24 }]}>My Active Redemptions</Text>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 12 }}>
             {activeCodes.map((code) => (
               <View key={code.id} style={{ width: 146 }}>
@@ -453,7 +529,7 @@ export function RewardsScreen({
           <View style={styles.successCard}>
             <Pressable
               style={styles.successClose}
-              onPress={() => { setRedeemItem(null); setSuccessCode(null); setSub('activeCodes'); }}
+              onPress={() => { setRedeemItem(null); setSuccessCode(null); setSuccessPending(false); setSub('activeCodes'); }}
               hitSlop={8}
             >
               <Feather name="x" size={18} color={colors.grayText} />
@@ -461,10 +537,12 @@ export function RewardsScreen({
             <View style={styles.successCircle}>
               <Feather name="check" size={44} color="#fff" />
             </View>
-            <Text style={styles.successTitle}>Reward Redeemed!</Text>
+            <Text style={styles.successTitle}>{successPending ? 'Request Submitted' : 'Reward Approved!'}</Text>
             <Text style={styles.successCode}>{successCode}</Text>
             <Text style={styles.successNote}>
-              To claim your reward, please show this code in any Superkalan Gaz Branches near you.
+              {successPending
+                ? 'A redemption code will be issued after Branch Manager approval.'
+                : 'To claim your reward, show this code at the issuing Superkalan Gaz branch.'}
             </Text>
           </View>
         </View>

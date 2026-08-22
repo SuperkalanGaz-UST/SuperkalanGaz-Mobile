@@ -17,9 +17,8 @@ import { supabase } from '@/lib/supabase';
 
 /**
  * Household = residential (points rewards), Commercial = business (30+1 exchange).
- * The backend has no account-type field yet, so the login tab is the source of
- * truth: we persist the customer's choice and route the app home from it. Move
- * this onto the server profile once the API exposes it.
+ * The protected Auth app_metadata claim is authoritative; local storage only
+ * helps restore UI state while the session is loading.
  */
 export type AccountType = 'household' | 'commercial';
 
@@ -47,6 +46,11 @@ export interface ProfileUpdateInput {
 
 /** AsyncStorage key for the persisted account type (survives app restarts). */
 const ACCOUNT_TYPE_KEY = 'superkalan.accountType';
+
+function accountTypeFromSession(session: Session | null): AccountType | null {
+  const value = session?.user.app_metadata.account_type;
+  return value === 'household' || value === 'commercial' ? value : null;
+}
 
 async function requestSignUpOtpResend(
   method: SignUpInput['method'],
@@ -79,7 +83,11 @@ async function requestSignUpOtpResend(
  */
 async function ensureCustomerSession(session: Session): Promise<{ session: Session; error: string | null }> {
   const metadata = session.user.app_metadata;
-  if (metadata.role === 'customer' && metadata.status === 'Active') {
+  if (
+    metadata.role === 'customer' &&
+    metadata.status === 'Active' &&
+    (metadata.account_type === 'household' || metadata.account_type === 'commercial')
+  ) {
     return { session, error: null };
   }
 
@@ -147,13 +155,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     Promise.all([supabase.auth.getSession(), AsyncStorage.getItem(ACCOUNT_TYPE_KEY)]).then(
       async ([{ data }, storedType]) => {
         const restored = data.session ? await ensureCustomerSession(data.session) : null;
-        setSession(restored?.session ?? data.session);
-        if (storedType === 'household' || storedType === 'commercial') setAccountType(storedType);
+        const restoredSession = restored?.session ?? data.session;
+        setSession(restoredSession);
+        setAccountType(
+          accountTypeFromSession(restoredSession) ??
+            (storedType === 'household' || storedType === 'commercial' ? storedType : null),
+        );
         setInitializing(false);
       },
     );
     const { data: sub } = supabase.auth.onAuthStateChange((_event, next) => {
       setSession(next);
+      const serverType = accountTypeFromSession(next);
+      if (serverType) setAccountType(serverType);
     });
     return () => sub.subscription.unsubscribe();
   }, []);
@@ -174,8 +188,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (!data.session) return { error: 'No signed-in customer session was created' };
       const prepared = await ensureCustomerSession(data.session);
       if (prepared.error) return { error: prepared.error };
+      const serverType = accountTypeFromSession(prepared.session);
+      if (!serverType) return { error: 'This customer account has no loyalty track.' };
+      if (serverType !== chosenType) {
+        await supabase.auth.signOut();
+        setSession(null);
+        setAccountType(null);
+        return {
+          error: `This is a ${serverType === 'household' ? 'Household' : 'Commercial'} account. Select the matching sign-in tab.`,
+        };
+      }
       setSession(prepared.session);
-      await AsyncStorage.setItem(ACCOUNT_TYPE_KEY, chosenType);
+      setAccountType(serverType);
+      await AsyncStorage.setItem(ACCOUNT_TYPE_KEY, serverType);
       return { error: null };
     };
 
