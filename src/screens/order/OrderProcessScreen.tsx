@@ -212,6 +212,17 @@ function getMinimumScheduleDate() {
   return tomorrow;
 }
 
+function getMaximumScheduleDate() {
+  const maximumDate = startOfDay(new Date());
+  maximumDate.setDate(maximumDate.getDate() + 3);
+  return maximumDate;
+}
+
+function isWithinScheduleWindow(date: Date, minimumDate: Date, maximumDate: Date) {
+  const dateTime = startOfDay(date).getTime();
+  return dateTime >= minimumDate.getTime() && dateTime <= maximumDate.getTime();
+}
+
 function startOfMonth(date: Date) {
   return new Date(date.getFullYear(), date.getMonth(), 1);
 }
@@ -539,6 +550,17 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
       }
       return;
     }
+    if (deliverySchedule === 'later') {
+      const minimumDate = getMinimumScheduleDate();
+      const maximumDate = getMaximumScheduleDate();
+      if (!scheduledDate
+        || !scheduledTime
+        || !isWithinScheduleWindow(scheduledDate, minimumDate, maximumDate)) {
+        showToast('Choose a delivery date within the next 3 days.');
+        setStep('schedule');
+        return;
+      }
+    }
     if (!selectedBranch || !address || !selectedProducts[0] || !session?.user) {
       showToast('Select a branch, address, and cylinder first.');
       return;
@@ -604,11 +626,21 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
     ? `${formatScheduleDate(scheduledDate)} • ${scheduledTime}`
     : '';
   const minimumScheduleDate = getMinimumScheduleDate();
+  const maximumScheduleDate = getMaximumScheduleDate();
   const minimumScheduleMonth = startOfMonth(minimumScheduleDate);
+  const maximumScheduleMonth = startOfMonth(maximumScheduleDate);
   const calendarDays = buildCalendarDays(visibleScheduleMonth);
   const canViewPreviousMonth = visibleScheduleMonth.getTime() > minimumScheduleMonth.getTime();
+  const canViewNextMonth = visibleScheduleMonth.getTime() < maximumScheduleMonth.getTime();
+  const hasValidScheduledDate = scheduledDate
+    ? isWithinScheduleWindow(scheduledDate, minimumScheduleDate, maximumScheduleDate)
+    : false;
+  const hasValidDraftScheduleDate = draftScheduleDate
+    ? isWithinScheduleWindow(draftScheduleDate, minimumScheduleDate, maximumScheduleDate)
+    : false;
   const canContinueFromSchedule = deliverySchedule === 'now'
-    || (deliverySchedule === 'later' && Boolean(scheduledLabel));
+    || (deliverySchedule === 'later' && Boolean(scheduledTime) && hasValidScheduledDate);
+  const canPlaceOrder = Boolean(currentOrder) || canContinueFromSchedule;
   const canContinueFromLocation = Boolean(address && selectedBranch);
 
   useEffect(() => {
@@ -1005,7 +1037,10 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
   };
 
   const openScheduleModal = () => {
-    const initialDate = scheduledDate ? startOfDay(scheduledDate) : null;
+    const initialDate = scheduledDate
+      && isWithinScheduleWindow(scheduledDate, minimumScheduleDate, maximumScheduleDate)
+      ? startOfDay(scheduledDate)
+      : null;
     setDeliverySchedule('later');
     setDraftScheduleDate(initialDate);
     setDraftScheduleTime(scheduledTime || DELIVERY_TIME_OPTIONS[1]);
@@ -1016,12 +1051,20 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
   const changeScheduleMonth = (offset: number) => {
     setVisibleScheduleMonth((current) => {
       const next = new Date(current.getFullYear(), current.getMonth() + offset, 1);
-      return next.getTime() < minimumScheduleMonth.getTime() ? current : next;
+      const nextTime = next.getTime();
+      return nextTime < minimumScheduleMonth.getTime() || nextTime > maximumScheduleMonth.getTime()
+        ? current
+        : next;
     });
   };
 
   const confirmSchedule = () => {
-    if (!draftScheduleDate) return;
+    if (!draftScheduleDate
+      || !isWithinScheduleWindow(draftScheduleDate, minimumScheduleDate, maximumScheduleDate)) {
+      setDraftScheduleDate(null);
+      showToast('Choose a delivery date within the next 3 days.');
+      return;
+    }
     setDeliverySchedule('later');
     setScheduledDate(draftScheduleDate);
     setScheduledTime(draftScheduleTime);
@@ -1491,8 +1534,10 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
       <View style={styles.hair} />
 
       <Pressable
-        style={[styles.cta, placingOrder ? styles.ctaDisabled : null]}
-        disabled={placingOrder}
+        accessibilityRole="button"
+        accessibilityState={{ disabled: placingOrder || !canPlaceOrder }}
+        style={[styles.cta, placingOrder || !canPlaceOrder ? styles.ctaDisabled : null]}
+        disabled={placingOrder || !canPlaceOrder}
         onPress={() => void handlePlaceOrder()}
       >
         <Text style={styles.ctaText}>
@@ -2082,7 +2127,7 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
               <Text style={styles.dialogTitle}>Schedule for Later</Text>
               <Pressable onPress={() => setModal('none')} hitSlop={8}><Feather name="x" size={20} color={colors.gray} /></Pressable>
             </View>
-            <Text style={styles.metaText}>When do you want your order to be delivered?</Text>
+            <Text style={styles.metaText}>Choose a delivery date within the next 3 days.</Text>
             <View style={styles.calendarBox}>
               <View style={styles.calHeader}>
                 <Pressable
@@ -2102,11 +2147,13 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
                 <Pressable
                   accessibilityRole="button"
                   accessibilityLabel="Next month"
+                  accessibilityState={{ disabled: !canViewNextMonth }}
+                  disabled={!canViewNextMonth}
                   hitSlop={6}
                   onPress={() => changeScheduleMonth(1)}
-                  style={styles.calNavButton}
+                  style={[styles.calNavButton, !canViewNextMonth ? styles.calNavButtonDisabled : null]}
                 >
-                  <Feather name="chevron-right" size={18} color={colors.heading} />
+                  <Feather name="chevron-right" size={18} color={canViewNextMonth ? colors.heading : colors.muted} />
                 </Pressable>
               </View>
               <View style={styles.calGrid}>
@@ -2116,7 +2163,7 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
                 {calendarDays.map((date, index) => {
                   if (!date) return <View key={`empty-${index}`} style={styles.calCell} />;
 
-                  const disabled = date.getTime() < minimumScheduleDate.getTime();
+                  const disabled = !isWithinScheduleWindow(date, minimumScheduleDate, maximumScheduleDate);
                   const selected = draftScheduleDate ? isSameDay(date, draftScheduleDate) : false;
                   return (
                     <Pressable
@@ -2167,12 +2214,12 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
 
             <Pressable
               accessibilityRole="button"
-              accessibilityState={{ disabled: !draftScheduleDate }}
-              disabled={!draftScheduleDate}
-              style={[styles.cta, styles.scheduleConfirm, !draftScheduleDate ? styles.ctaDisabled : null]}
+              accessibilityState={{ disabled: !hasValidDraftScheduleDate }}
+              disabled={!hasValidDraftScheduleDate}
+              style={[styles.cta, styles.scheduleConfirm, !hasValidDraftScheduleDate ? styles.ctaDisabled : null]}
               onPress={confirmSchedule}
             >
-              <Text style={styles.ctaText}>{draftScheduleDate ? 'CONFIRM SCHEDULE' : 'SELECT A DATE'}</Text>
+              <Text style={styles.ctaText}>{hasValidDraftScheduleDate ? 'CONFIRM SCHEDULE' : 'SELECT A DATE'}</Text>
             </Pressable>
           </View>
         </View>
