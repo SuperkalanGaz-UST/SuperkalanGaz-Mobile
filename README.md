@@ -1,15 +1,19 @@
 # superkalan-crm-mobile
 
-Customer-only mobile app for the **Superkalan Gaz CRM** — Expo + React Native + TypeScript.
-Staff (SA/FA/BO/BM) use the web dashboard; this app is **customers only** (AGENTS.md §2, §7).
+Customer and Delivery Rider mobile app for the **Superkalan Gaz CRM** — Expo + React Native +
+TypeScript. SA/FA/BO/BM continue to use the web dashboard. The existing Customer experience
+is implemented; the role-gated Delivery Rider experience is the next planned mobile slice.
 
-Scope (the 5 confirmed modules, customer slice):
+Scope (the 5 confirmed modules, mobile slices):
 
 - **CIM** — profile, saved addresses, purchase history.
 - **SRD** — place orders (`order_source: 'Mobile App'`), track delivery **status milestones
   only** (never live GPS coordinates).
 - **LPM** — view loyalty points / rewards.
 - **CSAT** — post-delivery star rating + complaint submission.
+- **Delivery Rider / SRD / Fleet** — accept a Branch Owner's identity-bound branch invitation, manage
+  availability, accept or decline assigned service-request offers, and update delivery
+  milestones. SinoTrack ST-901 through Traccar remains the authoritative live GPS source.
 
 All data access goes through the NestJS API (`superkalan-crm-api`) with a branch-scoped JWT.
 Supabase is used for **auth only** — never the data SDK (AGENTS.md §4).
@@ -32,7 +36,7 @@ superkalan-crm-mobile/
     ├── contexts/           # AuthContext (session)
     ├── hooks/              # reusable hooks
     ├── navigation/         # RootNavigator + stacks/tabs
-    ├── screens/            # feature screens (customer-only)
+    ├── screens/            # role-gated Customer screens; planned Delivery Rider screens
     │   ├── auth/           #   sign in / register
     │   ├── home/           #   dashboard / reorder
     │   ├── orders/         #   place order · track milestones
@@ -100,10 +104,19 @@ The mobile sign-up flow calls `signUp` before opening the OTP screen, verifies
 the entered code with `verifyOtp`, and supports requesting a fresh code. No SMTP
 credential belongs in `.env`, `.env.example`, or client-side TypeScript.
 
+## Delivery Rider journey
+
+See [`docs/driver-registration-user-journey.md`](docs/driver-registration-user-journey.md)
+for the invitation registration, Branch Owner authorization, Fleet-roster, vehicle-assignment, and order
+acceptance flow.
+
 ## Conventions
 
-- Customer-only: **no staff/admin screens**, and **no map with live coordinates** — milestones
-  only (AGENTS.md §7, mobile section).
+- Customer and Delivery Rider navigation must be separated by protected server-issued role claims;
+  there are no SA/FA/BO/BM screens in this app.
+- Customers receive milestones only. Delivery Rider workflow actions do not make the phone the GPS
+  tracker and do not expose Traccar credentials; live vehicle positions continue to come
+  from SinoTrack ST-901 hardware through the NestJS API.
 - `src/lib/phMobile.ts` is a byte-for-byte copy of the web util; keep them in sync (AGENTS.md
   drift note). The API DTOs remain the real validation boundary.
 - Talk to the API only; branch scoping is enforced server-side.

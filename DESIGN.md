@@ -1,6 +1,9 @@
-# DESIGN.md — Superkalan Gaz Mobile (Customer App)
+# DESIGN.md — Superkalan Gaz Mobile (Customer and Delivery Rider App)
 
-> UI/UX format for the customer-facing Expo/React Native app (`SuperkalanGaz-Mobile`).
+> UI/UX format for the role-gated Customer and Delivery Rider Expo/React Native app
+> (`SuperkalanGaz-Mobile`). The existing reference screens are Customer-facing; Delivery Rider
+> screens must reuse the same tokens and primitives while using a separate Delivery Rider
+> navigation tree.
 > The screens were ported from the original
 > [Figma Make prototype](https://www.figma.com/design/AtT82H0L2pN7gKwY11PHBS/Superkalan-Gaz-Mobile-App--Copy-).
 > The generated web-React bundle was removed after the native port because it was never
@@ -26,6 +29,10 @@ Design source of truth: the linked Figma design and the tokens in `src/theme/col
   (`src/components/ui/`) — and differ only in *data*, never in styling. The account type is
   chosen on the login tab and persisted in `AuthContext`; new surfaces must work identically
   for both.
+- **Role-separated journeys.** Customer and Delivery Rider are authorization roles, not account-type
+  styling variants. After authentication, route from protected server-issued claims to
+  either Customer or Delivery Rider navigation. An invited but unactivated Rider sees only
+  invitation/verification status and sign-out; they must never reach operational screens.
 - **Token-first, never ad-hoc.** Every color comes from `@/theme/colors`, every font from
   `@/theme/fonts`. Do not inline raw hex or font strings in a screen — if a value is
   missing, add a token (§2/§3) rather than hardcoding it.

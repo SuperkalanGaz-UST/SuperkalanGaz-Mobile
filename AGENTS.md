@@ -26,7 +26,7 @@ constraints must never be violated.
 | ---------------------- | ------------------------- | -------------------------------- |
 | `superkalan-crm-api`   | NestJS + TypeScript       | Backend, business logic, data    |
 | `superkalan-crm-web`   | Next.js (React)           | Internal staff dashboard (SA/FA/BO/BM) |
-| `SuperkalanGaz-Mobile` | React Native + Expo      | **Customer-only** mobile app     |
+| `SuperkalanGaz-Mobile` | React Native + Expo      | Customer and **Delivery Rider** mobile app |
 
 Sections below are tagged `[api]`, `[web]`, `[mobile]`, or `[all]` where they apply.
 
@@ -66,7 +66,7 @@ Sections below are tagged `[api]`, `[web]`, `[mobile]`, or `[all]` where they ap
   from `tile.openstreetmap.org`. The browser loads the OpenFreeMap style/tiles; the NestJS
   API only supplies CRM-owned coordinates/geofences. Geocoding is not currently
   implemented and must be treated as a separate future decision.
-- **Mobile:** React Native + Expo (customers only).
+- **Mobile:** React Native + Expo (Customer and Delivery Rider role-gated experiences).
 - **GPS:** **SinoTrack ST-901** hardware devices → **Traccar** (self-hosted middleware) →
   ingested by the API. These are two distinct things; never conflate them (§10).
 - **Edge:** NGINX reverse proxy in front of the API.
@@ -116,7 +116,8 @@ Scoping by role (see §7 for full permissions):
 | **Super Administrator (SA)** | Web | Top-level governance; approve or reject FA-submitted SLA-threshold, price-configuration, Branch Owner-reassignment, and FA-account-creation requests; review immutable price-change, Branch Owner-change, approval, and security activity logs; cross-branch read visibility | Submit or approve their own request; mutate audit history; perform operational writes; process service requests; dispatch; approve redemptions |
 | **Franchise Administrator (FA)** | Web | Cross-branch read visibility; submit system-wide SLA-threshold, price-configuration, Branch Owner-reassignment, and FA-account-creation requests for SA approval; perform initial branch and Branch Owner onboarding; manage other branch accounts | Approve governance requests or FA account creation; mutate audit history; perform operational writes; process service requests; dispatch; approve redemptions |
 | **Branch Owner (BO)** | Web | Configure **their branch only**: loyalty merchandise catalog, point rates, threshold values *within FA-set bounds*, Dual-Authorization toggle; view branch analytics | Process daily orders; dispatch; cross-branch access |
-| **Branch Manager (BM)** | Web | **Day-to-day ops for their branch:** create/process service requests, dispatch riders, approve loyalty redemptions | Change SLA thresholds; act outside own branch |
+| **Branch Manager (BM)** | Web | **Day-to-day ops for their branch:** create/process service requests, prepare authorized Delivery Riders for dispatch, offer/dispatch service requests, assign branch vehicles, approve loyalty redemptions | Authorize Delivery Rider identity or branch membership; change SLA thresholds; act outside own branch |
+| **Delivery Rider (DR)** | **Mobile only** | Accept a Branch Owner invitation, manage availability after activation, accept or decline assigned service-request offers, and update delivery milestones | Choose or change authoritative `branch_id`; browse or claim unoffered requests; access another branch or staff governance screens |
 | **Customer (CU)** | **Mobile only** | Place orders, track delivery status *milestones*, submit CSAT | Access web dashboard; see live GPS coordinates |
 
 Hard constraints:
@@ -131,6 +132,11 @@ Hard constraints:
 - **Audit history is immutable to users.** Price changes, Branch Owner changes, FA account
   creation events, and approval decisions must record actor, action, affected record,
   before/after values where applicable, timestamp, and decision reason.
+- **Delivery Rider provisioning is invitation-only.** A Branch Owner supplies the intended
+  identity; the API binds a single-use, expiring invitation to the Owner's JWT-derived branch.
+- **Invitation acceptance is the authorization.** Only the API writes protected `driver`,
+  invitation-bound `branch_id`, and active claims to `app_metadata`. No Branch Manager
+  approval or applicant-selected branch is allowed.
 - **Customers see delivery status milestones only — never live GPS coordinates.**
 
 ---
@@ -140,7 +146,8 @@ Hard constraints:
 **5 confirmed modules. There is no Supply Chain module.**
 
 1. **Customer Information Management (CIM)** — profiles, addresses, purchase history.
-2. **Service Request & Dispatch (SRD)** — digital order creation + rider assignment.
+2. **Service Request & Dispatch (SRD)** — digital order creation, Delivery Rider offer/assignment,
+   acceptance, and delivery milestone updates.
    - **Four-timestamp SLA chain (mandatory):**
      `requested_at → dispatched_at → in_transit_at → delivered_at`.
    - SLA breach is measured across **three segments**: request→dispatch,
@@ -149,12 +156,14 @@ Hard constraints:
      `Walk-in/Phone`) for channel-level SLA reporting. Never omit it.
    - **Race condition:** re-check `dispatched_at` state at dispatch time to prevent
      double-dispatch (panel-defense requirement).
+   - Offering a request does not stamp `dispatched_at`; atomic Delivery Rider acceptance does.
 3. **Loyalty Program Monitoring (LPM)** — see §8a. Two **separate** tracks; never merge.
 4. **CSAT Feedback & Analytics** — post-delivery star ratings, complaint (Incident) logging,
    average response-time tracking.
-5. **Fleet Management** — GPS via SinoTrack ST-901 → Traccar → API. **Riders do not use a
-   mobile app**; there is no rider client. Live GPS/Fleet integration is
-   hardware-dependent and may be sprint-deferred — check current sprint before building it.
+5. **Fleet Management** — Delivery Rider roster and vehicle assignment plus GPS via SinoTrack
+   ST-901 → Traccar → API. Delivery Riders use mobile for registration, availability, offer
+   acceptance, and milestones; live coordinates still come only from installed hardware
+   through Traccar. Hardware-dependent live GPS may be sprint-deferred.
 
 ### 8a. Loyalty Program Rules `[api] [web]`
 
@@ -172,6 +181,17 @@ Shared workflow:
   acceptance criteria.**
 - **Re-validate eligibility at BM approval time** (not only at flagging time) — panel-defense
   requirement.
+
+### 8b. Delivery Rider invitation and branch activation `[api] [web] [mobile]`
+
+1. The Branch Owner issues a single-use, expiring invitation bound to the intended identity
+   and the Owner's JWT-derived branch.
+2. The invitee selects **Register as Delivery Rider**, verifies the invited email and PH
+   mobile identity, and sets their own password; the branch is not editable.
+3. The API consumes the invitation, writes protected Delivery Rider role/branch claims, and records
+   immutable attribution to the Branch Owner.
+4. After session refresh, the Rider gets Delivery Rider navigation and appears Offline and
+   unassigned. The Branch Manager manages vehicle readiness, not membership authorization.
 
 ---
 
@@ -197,6 +217,8 @@ Management as practices this system implements. Vocabulary: "Service Request" (o
 - **"Super Administrator"** — the correct top-level governance role name.
 - **"Franchise Administrator"** — the cross-branch administrative role below Super
   Administrator; never shorten it to a generic "Admin" in role labels.
+- **"Delivery Rider" / `DR`** — the user-facing delivery-person persona and Story prefix. Existing
+  `fleet.riders`, `rider_id`, and `Rider` identifiers are legacy implementation names.
 - **SinoTrack ST-901 = hardware device.** **Traccar = self-hosted middleware** that consumes
   SinoTrack data. Never call Traccar the tracker, or vice versa.
 
@@ -207,7 +229,6 @@ Management as practices this system implements. Vocabulary: "Service Request" (o
 Do not write code for, scaffold, or suggest:
 - Live corporate **ERP** integration for supply-chain replenishment.
 - **HR / payroll**, employee records, **BIR / tax** reporting, or **accounting**.
-- Any **rider mobile app** (riders are GPS-tracked via hardware only).
 - Additional ITIL practices beyond the four in §9.
 - Any feature outside the 5 modules in §8.
 
@@ -240,8 +261,8 @@ propose an in-scope alternative.
 - Talk to the API only; no direct DB access from the web app.
 
 ### `[mobile]`
-- Expo, customer-only flows. No staff/admin screens.
-- Surface **delivery status milestones only** — no map with live coordinates.
+- Expo with separate, role-gated Customer and Delivery Rider navigation. No SA/FA/BO/BM screens.
+- Customers see delivery milestones only; Delivery Rider actions do not replace hardware GPS.
 
 ---
 

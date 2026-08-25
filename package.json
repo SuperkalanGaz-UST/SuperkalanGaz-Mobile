@@ -2,7 +2,7 @@
   "name": "superkalan-crm-mobile",
   "version": "0.1.0",
   "private": true,
-  "description": "Superkalan Gaz CRM — customer-only mobile app (Expo + React Native).",
+  "description": "Superkalan Gaz CRM — Customer and Delivery Rider mobile app (Expo + React Native).",
   "main": "index.ts",
   "scripts": {
     "start": "expo start --go",
