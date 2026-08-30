@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { Session } from '@supabase/supabase-js';
 import { apiErrorMessage, apiFetch, apiPublicFetch } from '@/lib/api';
@@ -6,13 +6,14 @@ import { normalizePhMobile } from '@/lib/phMobile';
 import { supabase } from '@/lib/supabase';
 
 /**
- * Owns the customer's auth session. Sign-in goes through Supabase Auth; the
+ * Owns the mobile auth session. Sign-in goes through Supabase Auth; the
  * resulting access token is attached to every API call by `src/lib/api.ts`.
- * The customer's role/branch scope is derived server-side from that token — this
+ * The user's role/branch scope is derived server-side from that token — this
  * context never decides authorization.
  *
- * SCAFFOLD: session plumbing only. Fetch the customer profile from the API once
- * signed in, and expand the surface (register, reset password) as screens land.
+ * Password recovery uses Supabase Auth's recovery OTP. The temporary recovery
+ * session is deliberately kept out of `session` so RootNavigator cannot expose
+ * the signed-in customer app before the password has actually been changed.
  */
 
 /**
@@ -21,6 +22,7 @@ import { supabase } from '@/lib/supabase';
  * helps restore UI state while the session is loading.
  */
 export type AccountType = 'household' | 'commercial';
+export type MobileRole = 'customer' | 'driver' | 'unsupported' | null;
 
 /** Details collected by the sign-up form (Figma "Create a … Account"). */
 export interface SignUpInput {
@@ -46,10 +48,21 @@ export interface ProfileUpdateInput {
 
 /** AsyncStorage key for the persisted account type (survives app restarts). */
 const ACCOUNT_TYPE_KEY = 'superkalan.accountType';
+const PASSWORD_RECOVERY_KEY = 'superkalan.passwordRecovery';
 
 function accountTypeFromSession(session: Session | null): AccountType | null {
   const value = session?.user.app_metadata.account_type;
   return value === 'household' || value === 'commercial' ? value : null;
+}
+
+function mobileRoleFromSession(session: Session | null): MobileRole {
+  const role = session?.user.app_metadata.role;
+  if (role === 'customer' || role === 'driver') return role;
+  return typeof role === 'string' ? 'unsupported' : null;
+}
+
+function isActiveSession(session: Session): boolean {
+  return String(session.user.app_metadata.status ?? '').toLowerCase() === 'active';
 }
 
 async function requestSignUpOtpResend(
@@ -110,7 +123,9 @@ async function ensureCustomerSession(session: Session): Promise<{ session: Sessi
 
 interface AuthContextValue {
   session: Session | null;
-  /** Which customer experience to show. Null only when signed out. */
+  /** Protected app_metadata role used only to choose the correct mobile shell. */
+  sessionRole: MobileRole;
+  /** Which customer experience to show. Null for Delivery Riders and signed-out users. */
   accountType: AccountType | null;
   /** True until the initial session has been restored from storage. */
   initializing: boolean;
@@ -121,6 +136,8 @@ interface AuthContextValue {
     password: string,
     accountType: AccountType,
   ) => Promise<{ error: string | null }>;
+  /** Sign in after the API has consumed and activated a Delivery Rider invitation. */
+  signInDeliveryRider: (email: string, password: string) => Promise<{ error: string | null }>;
   /**
    * Register a new customer and request the signup code from Supabase Auth.
    * `needsConfirmation` is true when the caller must show the OTP screen.
@@ -137,6 +154,12 @@ interface AuthContextValue {
     method: SignUpInput['method'],
     identifier: string,
   ) => Promise<{ error: string | null }>;
+  /** Send the non-enumerating recovery email managed by Supabase Auth. */
+  requestPasswordReset: (email: string) => Promise<{ error: string | null }>;
+  /** Exchange the emailed recovery OTP for a short-lived recovery session. */
+  verifyPasswordResetOtp: (email: string, token: string) => Promise<{ error: string | null }>;
+  /** Change the password, then end the temporary recovery session locally. */
+  completePasswordReset: (password: string) => Promise<{ error: string | null }>;
   /** Reload the signed-in customer's latest Auth profile metadata. */
   refreshProfile: () => Promise<{ error: string | null }>;
   updateProfile: (input: ProfileUpdateInput) => Promise<{ error: string | null }>;
@@ -149,12 +172,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [accountType, setAccountType] = useState<AccountType | null>(null);
   const [initializing, setInitializing] = useState(true);
+  const passwordRecoveryRef = useRef(false);
 
   useEffect(() => {
     // Restore any persisted session + account type, then keep them in sync.
-    Promise.all([supabase.auth.getSession(), AsyncStorage.getItem(ACCOUNT_TYPE_KEY)]).then(
-      async ([{ data }, storedType]) => {
-        const restored = data.session ? await ensureCustomerSession(data.session) : null;
+    Promise.all([
+      supabase.auth.getSession(),
+      AsyncStorage.getItem(ACCOUNT_TYPE_KEY),
+      AsyncStorage.getItem(PASSWORD_RECOVERY_KEY),
+    ]).then(
+      async ([{ data }, storedType, storedRecovery]) => {
+        if (storedRecovery === 'true') {
+          // The screen state itself is intentionally not persisted. If the app
+          // was closed mid-reset, discard its recovery session and require a
+          // fresh code instead of restoring it as a normal customer session.
+          passwordRecoveryRef.current = true;
+          if (data.session) await supabase.auth.signOut({ scope: 'local' });
+          passwordRecoveryRef.current = false;
+          await AsyncStorage.removeItem(PASSWORD_RECOVERY_KEY);
+          setSession(null);
+          setInitializing(false);
+          return;
+        }
+
+        const restoredRole = mobileRoleFromSession(data.session);
+        const restored = data.session && (restoredRole === 'customer' || restoredRole === null)
+          ? await ensureCustomerSession(data.session)
+          : null;
         const restoredSession = restored?.session ?? data.session;
         setSession(restoredSession);
         setAccountType(
@@ -164,8 +208,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setInitializing(false);
       },
     );
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, next) => {
+    const { data: sub } = supabase.auth.onAuthStateChange((event, next) => {
+      if (event === 'PASSWORD_RECOVERY') {
+        passwordRecoveryRef.current = true;
+        void AsyncStorage.setItem(PASSWORD_RECOVERY_KEY, 'true');
+        setSession(null);
+        return;
+      }
+      if (event === 'SIGNED_OUT') {
+        passwordRecoveryRef.current = false;
+        void AsyncStorage.removeItem(PASSWORD_RECOVERY_KEY);
+        setSession(null);
+        return;
+      }
+      if (passwordRecoveryRef.current) {
+        setSession(null);
+        return;
+      }
+
       setSession(next);
+      if (mobileRoleFromSession(next) === 'driver') setAccountType(null);
       const serverType = accountTypeFromSession(next);
       if (serverType) setAccountType(serverType);
     });
@@ -178,19 +240,42 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // it only once the credentials actually check out.
     const runSignIn = async (
       credentials: { email: string; password: string } | { phone: string; password: string },
-      chosenType: AccountType,
+      chosenType: AccountType | null,
     ): Promise<{ error: string | null }> => {
       setAccountType(chosenType);
       const { error } = await supabase.auth.signInWithPassword(credentials);
       if (error) return { error: error.message };
 
       const { data } = await supabase.auth.getSession();
-      if (!data.session) return { error: 'No signed-in customer session was created' };
+      if (!data.session) return { error: 'No signed-in session was created' };
+
+      const mobileRole = mobileRoleFromSession(data.session);
+      if (mobileRole === 'driver') {
+        if (!isActiveSession(data.session)) {
+          await supabase.auth.signOut();
+          setSession(null);
+          setAccountType(null);
+          return {
+            error: 'This Delivery Rider account is not active. Open the secure invitation link to finish activation.',
+          };
+        }
+        setSession(data.session);
+        setAccountType(null);
+        return { error: null };
+      }
+
+      if (mobileRole === 'unsupported') {
+        await supabase.auth.signOut();
+        setSession(null);
+        setAccountType(null);
+        return { error: 'This staff role is available on the web dashboard, not the mobile app.' };
+      }
+
       const prepared = await ensureCustomerSession(data.session);
       if (prepared.error) return { error: prepared.error };
       const serverType = accountTypeFromSession(prepared.session);
       if (!serverType) return { error: 'This customer account has no loyalty track.' };
-      if (serverType !== chosenType) {
+      if (chosenType && serverType !== chosenType) {
         await supabase.auth.signOut();
         setSession(null);
         setAccountType(null);
@@ -206,10 +291,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     return {
       session,
+      sessionRole: mobileRoleFromSession(session),
       accountType,
       initializing,
       signIn: (email, password, type) => runSignIn({ email, password }, type),
       signInWithPhone: (phone, password, type) => runSignIn({ phone, password }, type),
+      signInDeliveryRider: (email, password) => runSignIn({ email, password }, null),
       signUp: async (input) => {
         setAccountType(input.accountType);
 
@@ -297,6 +384,52 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return { error: prepared.error };
       },
       resendSignUpOtp: requestSignUpOtpResend,
+      requestPasswordReset: async (email) => {
+        const { error } = await supabase.auth.resetPasswordForEmail(email.trim().toLowerCase());
+        return {
+          error: error ? 'Could not send the reset code. Please try again later.' : null,
+        };
+      },
+      verifyPasswordResetOtp: async (email, token) => {
+        // Mark recovery before verification because verifyOtp emits its auth
+        // event before resolving, and that session must never enter MainApp.
+        passwordRecoveryRef.current = true;
+        await AsyncStorage.setItem(PASSWORD_RECOVERY_KEY, 'true');
+
+        const { data, error } = await supabase.auth.verifyOtp({
+          email: email.trim().toLowerCase(),
+          token,
+          type: 'recovery',
+        });
+        if (error || !data.session) {
+          passwordRecoveryRef.current = false;
+          await AsyncStorage.removeItem(PASSWORD_RECOVERY_KEY);
+          return {
+            error: error?.message ?? 'This reset code is invalid or has expired.',
+          };
+        }
+
+        setSession(null);
+        return { error: null };
+      },
+      completePasswordReset: async (password) => {
+        if (!passwordRecoveryRef.current) {
+          return { error: 'Verify a valid reset code before changing your password.' };
+        }
+
+        const { error } = await supabase.auth.updateUser({ password });
+        if (error) {
+          return { error: error.message };
+        }
+
+        // Recovery proves identity only for this reset. Do not silently carry
+        // that temporary session into the customer application.
+        await supabase.auth.signOut({ scope: 'local' });
+        passwordRecoveryRef.current = false;
+        await AsyncStorage.removeItem(PASSWORD_RECOVERY_KEY);
+        setSession(null);
+        return { error: null };
+      },
       refreshProfile: async () => {
         if (!session?.user) return { error: 'No signed-in customer found' };
 

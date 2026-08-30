@@ -26,6 +26,14 @@
         {
           "locationWhenInUsePermission": "Allow Superkalan Gaz to use your location to pin a delivery address."
         }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow Superkalan Gaz to select a delivery proof photo.",
+          "cameraPermission": "Allow Superkalan Gaz to take a delivery proof photo.",
+          "microphonePermission": false
+        }
       ]
     ]
   }

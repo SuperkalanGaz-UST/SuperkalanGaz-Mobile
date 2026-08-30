@@ -34,7 +34,8 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
 
   const headers = new Headers(init.headers);
   if (token) headers.set('Authorization', `Bearer ${token}`);
-  if (init.body && !headers.has('Content-Type')) {
+  const isMultipart = typeof FormData !== 'undefined' && init.body instanceof FormData;
+  if (init.body && !isMultipart && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json');
   }
 
@@ -47,7 +48,8 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
  */
 export async function apiPublicFetch(path: string, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers);
-  if (init.body && !headers.has('Content-Type')) {
+  const isMultipart = typeof FormData !== 'undefined' && init.body instanceof FormData;
+  if (init.body && !isMultipart && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json');
   }
   return fetch(`${API_URL}/api${path}`, { ...init, headers });

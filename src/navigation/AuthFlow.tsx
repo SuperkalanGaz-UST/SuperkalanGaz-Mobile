@@ -10,6 +10,7 @@ import {
   SuccessScreen,
 } from '@/screens/auth/ForgotFlow';
 import { useAuth } from '@/contexts/AuthContext';
+import { DeliveryRiderInvitationFlow } from '@/screens/driver/DeliveryRiderInvitationFlow';
 import type { AccountType, AuthScreen, InputMode, OtpVariant, SignupDraft } from '@/navigation/types';
 
 /**
@@ -18,13 +19,20 @@ import type { AccountType, AuthScreen, InputMode, OtpVariant, SignupDraft } from
  * sign-in/up flips the Supabase session; RootNavigator then swaps in the app.
  */
 export function AuthFlow() {
-  const { signUp } = useAuth();
+  const {
+    signUp,
+    requestPasswordReset,
+    verifyPasswordResetOtp,
+    completePasswordReset,
+  } = useAuth();
   const [screen, setScreen] = useState<AuthScreen>('login');
   const [account, setAccount] = useState<AccountType>('household');
   const [input, setInput] = useState<InputMode>('email');
   const [draft, setDraft] = useState<SignupDraft | null>(null);
   const [otpVariant, setOtpVariant] = useState<OtpVariant>('email');
   const [notice, setNotice] = useState('');
+  const [recoveryEmail, setRecoveryEmail] = useState('');
+  const [deliveryRiderToken, setDeliveryRiderToken] = useState<string | null>(null);
 
   const render = () => {
     switch (screen) {
@@ -73,13 +81,59 @@ export function AuthFlow() {
           />
         );
       case 'forgot':
-        return <ForgotPasswordScreen onBack={() => setScreen('login')} onNext={() => setScreen('forgot-check')} />;
+        return (
+          <ForgotPasswordScreen
+            onBack={() => setScreen('login')}
+            onNext={async (email) => {
+              const { error } = await requestPasswordReset(email);
+              if (error) return error;
+              setRecoveryEmail(email);
+              setScreen('forgot-check');
+              return null;
+            }}
+          />
+        );
       case 'forgot-check':
-        return <ForgotCheckScreen onBack={() => setScreen('forgot')} onNext={() => setScreen('set-password')} />;
+        return (
+          <ForgotCheckScreen
+            onBack={() => setScreen('forgot')}
+            onNext={async (token) => {
+              const { error } = await verifyPasswordResetOtp(recoveryEmail, token);
+              if (error) return error;
+              setScreen('set-password');
+              return null;
+            }}
+            onResend={async () => {
+              const { error } = await requestPasswordReset(recoveryEmail);
+              return error;
+            }}
+          />
+        );
       case 'set-password':
-        return <SetPasswordScreen onBack={() => setScreen('forgot-check')} onNext={() => setScreen('success')} />;
+        return (
+          <SetPasswordScreen
+            onBack={() => setScreen('forgot-check')}
+            onNext={async (password) => {
+              const { error } = await completePasswordReset(password);
+              if (error) return error;
+              setScreen('success');
+              return null;
+            }}
+          />
+        );
       case 'success':
         return <SuccessScreen onDone={() => setScreen('login')} />;
+      case 'delivery-rider-invitation':
+        return (
+          <DeliveryRiderInvitationFlow
+            token={deliveryRiderToken}
+            onToken={setDeliveryRiderToken}
+            onBack={() => {
+              setDeliveryRiderToken(null);
+              setScreen('login');
+            }}
+          />
+        );
       case 'login':
       default:
         return (
@@ -97,6 +151,11 @@ export function AuthFlow() {
               setNotice('');
               setDraft(null);
               setScreen('signup');
+            }}
+            onDeliveryRiderInvitation={() => {
+              setNotice('');
+              setDeliveryRiderToken(null);
+              setScreen('delivery-rider-invitation');
             }}
           />
         );

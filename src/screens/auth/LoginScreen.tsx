@@ -9,6 +9,7 @@ import {
   Text,
   View,
 } from 'react-native';
+import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@/contexts/AuthContext';
 import { normalizePhMobile } from '@/lib/phMobile';
@@ -38,6 +39,7 @@ export function LoginScreen({
   onInputChange,
   onForgot,
   onSignUp,
+  onDeliveryRiderInvitation,
 }: {
   account: AccountType;
   input: InputMode;
@@ -46,6 +48,7 @@ export function LoginScreen({
   onInputChange: (v: InputMode) => void;
   onForgot: () => void;
   onSignUp: () => void;
+  onDeliveryRiderInvitation: () => void;
 }) {
   const insets = useSafeAreaInsets();
   const { signIn, signInWithPhone } = useAuth();
@@ -148,6 +151,20 @@ export function LoginScreen({
 
           <PrimaryButton label={busy ? 'Signing in…' : 'Sign in'} onPress={handleSignIn} disabled={busy} />
 
+          <Pressable
+            onPress={onDeliveryRiderInvitation}
+            style={({ pressed }) => [styles.driverInvite, pressed && styles.pressed]}
+          >
+            <View style={styles.driverIcon}>
+              <Feather name="truck" size={19} color={colors.primary} />
+            </View>
+            <View style={styles.driverCopy}>
+              <Text style={styles.driverTitle}>Register as Delivery Rider</Text>
+              <Text style={styles.driverSubtitle}>Use your Branch Owner invitation</Text>
+            </View>
+            <Feather name="chevron-right" size={19} color={colors.primary} />
+          </Pressable>
+
           <Text style={styles.signupRow}>
             Don't have an account?{' '}
             <Text style={styles.signupLink} onPress={onSignUp}>
@@ -181,6 +198,12 @@ const styles = StyleSheet.create({
   forgotWrap: { alignSelf: 'flex-end', marginTop: 4 },
   forgot: { fontFamily: fonts.regular, fontSize: 12, color: colors.primary, textDecorationLine: 'underline' },
   formError: { fontFamily: fonts.regular, fontSize: 12, color: colors.danger, textAlign: 'center' },
+  driverInvite: { flexDirection: 'row', alignItems: 'center', gap: 11, padding: 12, borderRadius: 14, borderWidth: 1, borderColor: '#CFE7F6', backgroundColor: colors.primaryTint },
+  driverIcon: { width: 38, height: 38, borderRadius: 19, backgroundColor: colors.surface, alignItems: 'center', justifyContent: 'center' },
+  driverCopy: { flex: 1 },
+  driverTitle: { fontFamily: fonts.semibold, fontSize: 12, color: colors.darkNavy },
+  driverSubtitle: { fontFamily: fonts.regular, fontSize: 10, color: colors.textMuted, marginTop: 2 },
+  pressed: { opacity: 0.75 },
   signupRow: { textAlign: 'center', fontFamily: fonts.regular, fontSize: 11, color: colors.footerText },
   signupLink: { fontFamily: fonts.regular, fontSize: 11, color: colors.signupLink, textDecorationLine: 'underline' },
 });

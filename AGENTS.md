@@ -117,7 +117,7 @@ Scoping by role (see §7 for full permissions):
 | **Franchise Administrator (FA)** | Web | Cross-branch read visibility; submit system-wide SLA-threshold, price-configuration, Branch Owner-reassignment, and FA-account-creation requests for SA approval; perform initial branch and Branch Owner onboarding; manage other branch accounts | Approve governance requests or FA account creation; mutate audit history; perform operational writes; process service requests; dispatch; approve redemptions |
 | **Branch Owner (BO)** | Web | Configure **their branch only**: loyalty merchandise catalog, point rates, threshold values *within FA-set bounds*, Dual-Authorization toggle; view branch analytics | Process daily orders; dispatch; cross-branch access |
 | **Branch Manager (BM)** | Web | **Day-to-day ops for their branch:** create/process service requests, prepare authorized Delivery Riders for dispatch, offer/dispatch service requests, assign branch vehicles, approve loyalty redemptions | Authorize Delivery Rider identity or branch membership; change SLA thresholds; act outside own branch |
-| **Delivery Rider (DR)** | **Mobile only** | Accept a Branch Owner invitation, manage availability after activation, accept or decline assigned service-request offers, and update delivery milestones | Choose or change authoritative `branch_id`; browse or claim unoffered requests; access another branch or staff governance screens |
+| **Delivery Rider (DR)** | **Web or mobile onboarding; mobile operations** | Accept a Branch Owner invitation through the dedicated registration flow, then use mobile to manage availability after activation, accept or decline assigned service-request offers, and update delivery milestones | Access a web operations dashboard; choose or change authoritative `branch_id`; browse or claim unoffered requests; access another branch or staff governance screens |
 | **Customer (CU)** | **Mobile only** | Place orders, track delivery status *milestones*, submit CSAT | Access web dashboard; see live GPS coordinates |
 
 Hard constraints:
@@ -134,6 +134,9 @@ Hard constraints:
   before/after values where applicable, timestamp, and decision reason.
 - **Delivery Rider provisioning is invitation-only.** A Branch Owner supplies the intended
   identity; the API binds a single-use, expiring invitation to the Owner's JWT-derived branch.
+- **Delivery Rider web access is registration-only.** The dedicated token-gated web page may
+  complete the same invitation flow as mobile, but activation must end with a mobile-app
+  handoff and must never expose Delivery Rider operations on web.
 - **Invitation acceptance is the authorization.** Only the API writes protected `driver`,
   invitation-bound `branch_id`, and active claims to `app_metadata`. No Branch Manager
   approval or applicant-selected branch is allowed.
@@ -161,8 +164,9 @@ Hard constraints:
 4. **CSAT Feedback & Analytics** — post-delivery star ratings, complaint (Incident) logging,
    average response-time tracking.
 5. **Fleet Management** — Delivery Rider roster and vehicle assignment plus GPS via SinoTrack
-   ST-901 → Traccar → API. Delivery Riders use mobile for registration, availability, offer
-   acceptance, and milestones; live coordinates still come only from installed hardware
+   ST-901 → Traccar → API. Delivery Riders may register through the invitation-authorized web
+   or mobile flow, but use mobile for availability, offer acceptance, and milestones; live
+   coordinates still come only from installed hardware
    through Traccar. Hardware-dependent live GPS may be sprint-deferred.
 
 ### 8a. Loyalty Program Rules `[api] [web]`
@@ -186,12 +190,14 @@ Shared workflow:
 
 1. The Branch Owner issues a single-use, expiring invitation bound to the intended identity
    and the Owner's JWT-derived branch.
-2. The invitee selects **Register as Delivery Rider**, verifies the invited email and PH
-   mobile identity, and sets their own password; the branch is not editable.
+2. The invitee selects **Register as Delivery Rider** in the dedicated web page or mobile
+   flow, verifies the invited email and PH mobile identity, and sets their own password; the
+   branch is not editable.
 3. The API consumes the invitation, writes protected Delivery Rider role/branch claims, and records
    immutable attribution to the Branch Owner.
-4. After session refresh, the Rider gets Delivery Rider navigation and appears Offline and
-   unassigned. The Branch Manager manages vehicle readiness, not membership authorization.
+4. Web registration ends with a mobile-app handoff. After session refresh, the Delivery Rider
+   gets mobile navigation and appears Offline and unassigned. The Branch Manager manages
+   vehicle readiness, not membership authorization.
 
 ---
 

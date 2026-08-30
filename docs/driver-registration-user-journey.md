@@ -1,4 +1,4 @@
-# Delivery Rider Mobile Registration and Branch Reflection
+# Delivery Rider Registration and Branch Reflection
 
 ## Scope and terminology
 
@@ -12,23 +12,25 @@ Management; it does not replace the SinoTrack ST-901 → Traccar GPS path.
 1. **Branch Owner authorizes membership.** In the web dashboard, the Branch Owner enters
    the intended Delivery Rider's verified name, email, and PH mobile number. The NestJS API
    creates a single-use, expiring invitation bound to the Owner's JWT-derived branch.
-2. **Choose the Delivery Rider path.** The invitee opens the mobile app and selects
-   **Register as Delivery Rider**. There is no public Rider signup or branch picker.
-3. **Create and verify the account.** The invitee sets their own password and completes the
-   six-digit email verification flow. The Branch Owner never knows the password.
+2. **Choose the Delivery Rider path.** A phone with the installed app opens the mobile
+   registration flow. A laptop or device without the app opens the dedicated token-gated
+   web registration page. There is no public signup or branch picker.
+3. **Create and verify the account.** The invitee opens the single-use email link and sets
+   their own password in either registration client. The Branch Owner never knows it.
 4. **Verify the invited identity.** The invitee confirms their PH mobile number. The field
    displays a fixed `+63` prefix and submits only canonical `+639XXXXXXXXX` format. Verified
    email and phone values must match the invitation.
 5. **Validate the invitation.** The API rejects an expired, revoked, used, replayed, or
    identity-mismatched invitation without revealing branch data. The invitation's branch is
-   displayed but cannot be selected or edited in mobile.
+   displayed but cannot be selected or edited in either registration client.
 6. **Activate safely.** Successful acceptance consumes the invitation and causes the API to
    set `role: driver`, the invitation-bound `branch_id`, and active status in protected
    `app_metadata`. Acceptance is the Owner's authorization; no Branch Manager approval is
    added. Immutable history records the Owner, Delivery Rider, branch, and acceptance.
-7. **Enter the branch roster.** After session refresh, the Delivery Rider lands on their
-   role-gated navigation and initially appears in that branch's Fleet roster as **Offline**
-   and **No vehicle assigned**. Invitation acceptance
+7. **Enter the branch roster.** Web registration ends by directing the Delivery Rider to
+   sign in to the mobile app. After mobile session refresh, the Delivery Rider lands on
+   their role-gated navigation and initially appears in that branch's Fleet roster as
+   **Offline** and **No vehicle assigned**. Invitation acceptance
    does not automatically create, transfer, or assign a vehicle.
 8. **Become dispatch-ready.** The Branch Manager assigns one registered, healthy branch
    vehicle. The Delivery Rider sets **Available** in mobile. Only an activated Delivery Rider with a

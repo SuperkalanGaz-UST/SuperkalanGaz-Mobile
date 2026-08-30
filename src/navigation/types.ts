@@ -20,7 +20,8 @@ export type AuthScreen =
   | 'forgot'
   | 'forgot-check'
   | 'set-password'
-  | 'success';
+  | 'success'
+  | 'delivery-rider-invitation';
 
 /** Data threaded through the signup → OTP → account-creation sequence. */
 export interface SignupDraft {
