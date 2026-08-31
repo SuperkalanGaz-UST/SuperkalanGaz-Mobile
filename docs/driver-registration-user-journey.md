@@ -4,8 +4,9 @@
 
 **Delivery Rider (`DR`)** is the user-facing persona. Existing `fleet.riders`, `rider_id`,
 and `Rider` identifiers remain compatible implementation names. The Delivery Rider mobile
-workflow is part of Service Request & Dispatch and Fleet
-Management; it does not replace the SinoTrack ST-901 → Traccar GPS path.
+workflow is part of Service Request & Dispatch and Fleet Management. Foreground phone GPS
+supports order and dispatch operations, while the separate SinoTrack ST-901 → Traccar path
+remains authoritative for vehicle geofencing and PMS.
 
 ## Primary user journey
 
@@ -33,7 +34,9 @@ Management; it does not replace the SinoTrack ST-901 → Traccar GPS path.
    **Offline** and **No vehicle assigned**. Invitation acceptance
    does not automatically create, transfer, or assign a vehicle.
 8. **Become dispatch-ready.** The Branch Manager assigns one registered, healthy branch
-   vehicle. The Delivery Rider sets **Available** in mobile. Only an activated Delivery Rider with a
+   vehicle. Before the Delivery Rider can set **Available**, mobile requests when-in-use
+   location permission. While Available or On Delivery, the foreground app sends operational
+   phone location to the branch-scoped NestJS API. Only an activated Delivery Rider with a
    valid same-branch vehicle assignment can receive an order offer.
 9. **Accept an order offer.** The Branch Manager offers a pending Service Request to that
     Delivery Rider. They see only the specifically assigned offer and may accept or decline.
@@ -52,6 +55,7 @@ Management; it does not replace the SinoTrack ST-901 → Traccar GPS path.
 | Invitation accepted | Total Delivery Riders +1; roster row appears as Offline | No automatic vehicle creation or assignment |
 | Vehicle assigned | Roster shows the branch vehicle and readiness | Existing vehicle shows the assigned Delivery Rider |
 | Delivery Rider goes Available | Delivery Rider becomes dispatch-eligible and counts in Active Now | Vehicle must still be Healthy |
+| Foreground phone location updates | Branch Manager dispatch receives the latest operational location/freshness | No change to vehicle geofence or PMS telemetry |
 | Offer accepted | Status becomes On Delivery; activity log records acceptance | Assigned vehicle is shown as in use |
 | Delivery Rider leaves geofence | Alert is derived from SinoTrack ST-901 data received through Traccar | Vehicle remains the tracked asset |
 | Delivery completed | Activity and SLA timestamps update; Delivery Rider returns to Available if eligible | Vehicle becomes available for its next assignment |
@@ -87,4 +91,7 @@ the active same-branch vehicle assignment.
 - Invitation acceptance does not create or assign a vehicle.
 - Phone input and API validation follow the project-wide Philippine mobile convention.
 - Order acceptance is concurrency-safe and cannot double-dispatch a Service Request.
-- Delivery Rider mobile actions never become the source of live GPS coordinates.
+- Delivery Rider foreground phone GPS supplies operational location only while Available or
+  On Delivery. It is branch-scoped, stops and clears on Offline, and is never exposed to customers.
+- SinoTrack ST-901 data received through Traccar remains the authoritative source for vehicle
+  geofencing and PMS; phone coordinates never update those Fleet calculations.

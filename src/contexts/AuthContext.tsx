@@ -65,6 +65,15 @@ function isActiveSession(session: Session): boolean {
   return String(session.user.app_metadata.status ?? '').toLowerCase() === 'active';
 }
 
+function isAcceptedDriverAwaitingMobileVerification(session: Session): boolean {
+  const metadata = session.user.app_metadata;
+  return (
+    metadata.role === 'driver' &&
+    metadata.status === 'Pending' &&
+    typeof metadata.delivery_rider_invitation_accepted_at === 'string'
+  );
+}
+
 async function requestSignUpOtpResend(
   method: SignUpInput['method'],
   identifier: string,
@@ -136,8 +145,10 @@ interface AuthContextValue {
     password: string,
     accountType: AccountType,
   ) => Promise<{ error: string | null }>;
-  /** Sign in after the API has consumed and activated a Delivery Rider invitation. */
+  /** Sign in after the website has accepted a Delivery Rider invitation. */
   signInDeliveryRider: (email: string, password: string) => Promise<{ error: string | null }>;
+  /** Refresh protected Auth claims after app-based Delivery Rider mobile verification. */
+  refreshSession: () => Promise<{ error: string | null }>;
   /**
    * Register a new customer and request the signup code from Supabase Auth.
    * `needsConfirmation` is true when the caller must show the OTP screen.
@@ -251,12 +262,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       const mobileRole = mobileRoleFromSession(data.session);
       if (mobileRole === 'driver') {
-        if (!isActiveSession(data.session)) {
+        if (chosenType) {
+          await supabase.auth.signOut();
+          setSession(null);
+          setAccountType(null);
+          return { error: 'Use Login as Delivery Rider for this account.' };
+        }
+        if (
+          !isActiveSession(data.session) &&
+          !isAcceptedDriverAwaitingMobileVerification(data.session)
+        ) {
           await supabase.auth.signOut();
           setSession(null);
           setAccountType(null);
           return {
-            error: 'This Delivery Rider account is not active. Open the secure invitation link to finish activation.',
+            error: 'Finish creating and accepting your Delivery Rider account from the invitation website first.',
           };
         }
         setSession(data.session);
@@ -269,6 +289,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setSession(null);
         setAccountType(null);
         return { error: 'This staff role is available on the web dashboard, not the mobile app.' };
+      }
+
+      if (!chosenType) {
+        await supabase.auth.signOut();
+        setSession(null);
+        setAccountType(null);
+        return { error: 'Use the Household or Commercial login for this customer account.' };
       }
 
       const prepared = await ensureCustomerSession(data.session);
@@ -297,6 +324,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       signIn: (email, password, type) => runSignIn({ email, password }, type),
       signInWithPhone: (phone, password, type) => runSignIn({ phone, password }, type),
       signInDeliveryRider: (email, password) => runSignIn({ email, password }, null),
+      refreshSession: async () => {
+        const { data, error } = await supabase.auth.refreshSession();
+        if (error || !data.session) {
+          return { error: error?.message ?? 'Could not refresh the Delivery Rider session.' };
+        }
+        setSession(data.session);
+        return { error: null };
+      },
       signUp: async (input) => {
         setAccountType(input.accountType);
 

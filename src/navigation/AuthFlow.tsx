@@ -10,7 +10,6 @@ import {
   SuccessScreen,
 } from '@/screens/auth/ForgotFlow';
 import { useAuth } from '@/contexts/AuthContext';
-import { DeliveryRiderInvitationFlow } from '@/screens/driver/DeliveryRiderInvitationFlow';
 import type { AccountType, AuthScreen, InputMode, OtpVariant, SignupDraft } from '@/navigation/types';
 
 /**
@@ -32,7 +31,6 @@ export function AuthFlow() {
   const [otpVariant, setOtpVariant] = useState<OtpVariant>('email');
   const [notice, setNotice] = useState('');
   const [recoveryEmail, setRecoveryEmail] = useState('');
-  const [deliveryRiderToken, setDeliveryRiderToken] = useState<string | null>(null);
 
   const render = () => {
     switch (screen) {
@@ -123,17 +121,6 @@ export function AuthFlow() {
         );
       case 'success':
         return <SuccessScreen onDone={() => setScreen('login')} />;
-      case 'delivery-rider-invitation':
-        return (
-          <DeliveryRiderInvitationFlow
-            token={deliveryRiderToken}
-            onToken={setDeliveryRiderToken}
-            onBack={() => {
-              setDeliveryRiderToken(null);
-              setScreen('login');
-            }}
-          />
-        );
       case 'login':
       default:
         return (
@@ -151,11 +138,6 @@ export function AuthFlow() {
               setNotice('');
               setDraft(null);
               setScreen('signup');
-            }}
-            onDeliveryRiderInvitation={() => {
-              setNotice('');
-              setDeliveryRiderToken(null);
-              setScreen('delivery-rider-invitation');
             }}
           />
         );

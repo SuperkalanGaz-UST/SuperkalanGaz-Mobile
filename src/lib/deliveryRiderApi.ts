@@ -1,4 +1,4 @@
-import { apiErrorMessage, apiFetch, apiPublicFetch } from '@/lib/api';
+import { apiErrorMessage, apiFetch } from '@/lib/api';
 
 export type DeliveryRiderAvailability =
   | 'Offline'
@@ -16,6 +16,10 @@ export interface DeliveryRiderInvitation {
   emailVerified: boolean;
   accountCreated: boolean;
   mobileVerified: boolean;
+}
+
+export interface DeliveryRiderMobileVerification extends DeliveryRiderInvitation {
+  verificationMode: 'sms' | 'placeholder';
 }
 
 export interface DeliveryVehicle {
@@ -52,10 +56,27 @@ export interface DeliveryRiderDashboard {
     mobile: string;
     branchName: string;
     availability: DeliveryRiderAvailability;
+    operationalLocation: DeliveryRiderOperationalLocation | null;
     vehicle: DeliveryVehicle | null;
   };
   currentOffer: DeliveryOffer | null;
   activeDelivery: DeliveryAssignment | null;
+}
+
+export interface DeliveryRiderOperationalLocation {
+  latitude: number;
+  longitude: number;
+  accuracyM: number | null;
+  capturedAt: string;
+  receivedAt: string;
+  source: 'phone';
+}
+
+export interface DeliveryRiderLocationUpdate {
+  latitude: number;
+  longitude: number;
+  accuracyM: number;
+  capturedAt: string;
 }
 
 interface ApiResult {
@@ -68,60 +89,42 @@ async function responseData<T>(response: Response, fallback: string): Promise<T>
   return data as T;
 }
 
-/**
- * Delivery Rider endpoints are intentionally kept behind NestJS. The API must
- * validate the single-use invitation and derive branch scope from the
- * invitation/JWT; neither registration client submits role or branch claims.
- *
- * The invitation, dashboard, and availability routes are implemented by the
- * Fleet module. Offer and milestone calls remain server-authoritative and
- * surface explicit API errors when no corresponding assignment exists.
- */
-export async function getDeliveryRiderInvitation(
-  token: string,
-): Promise<DeliveryRiderInvitation> {
-  const response = await apiPublicFetch(
-    `/delivery-rider-invitations/acceptance?token=${encodeURIComponent(token)}`,
+/** Loads the invitation-bound identity after website acceptance and app sign-in. */
+export async function getDeliveryRiderMobileVerification(): Promise<DeliveryRiderMobileVerification> {
+  const response = await apiFetch('/delivery-rider-invitations/session/mobile-verification');
+  return responseData<DeliveryRiderMobileVerification>(
+    response,
+    'Mobile verification is unavailable for this account.',
   );
-  return responseData<DeliveryRiderInvitation>(response, 'This invitation is unavailable.');
 }
 
-export async function createDeliveryRiderAccount(
-  token: string,
-  password: string,
-): Promise<ApiResult> {
-  const response = await apiPublicFetch('/delivery-rider-invitations/account', {
-    method: 'POST',
-    body: JSON.stringify({ token, password }),
-  });
-  return responseData<ApiResult>(response, 'Could not create the Delivery Rider account.');
+export async function completeDeliveryRiderPlaceholderVerification(): Promise<ApiResult> {
+  const response = await apiFetch(
+    '/delivery-rider-invitations/session/complete-placeholder-mobile-verification',
+    { method: 'POST' },
+  );
+  return responseData<ApiResult>(
+    response,
+    'Could not complete the temporary verification step.',
+  );
 }
 
-export async function resendDeliveryRiderMobileCode(token: string): Promise<ApiResult> {
-  const response = await apiPublicFetch('/delivery-rider-invitations/mobile-code', {
+export async function sendDeliveryRiderMobileVerificationCode(): Promise<ApiResult> {
+  const response = await apiFetch('/delivery-rider-invitations/session/mobile-code', {
     method: 'POST',
-    body: JSON.stringify({ token }),
   });
-  return responseData<ApiResult>(response, 'Could not send a new verification code.');
+  return responseData<ApiResult>(response, 'Could not send the verification code.');
 }
 
-export async function verifyDeliveryRiderMobile(
-  token: string,
-  code: string,
-): Promise<ApiResult> {
-  const response = await apiPublicFetch('/delivery-rider-invitations/verify-mobile', {
+export async function verifyDeliveryRiderMobileForSession(code: string): Promise<ApiResult> {
+  const response = await apiFetch('/delivery-rider-invitations/session/verify-mobile', {
     method: 'POST',
-    body: JSON.stringify({ token, code }),
+    body: JSON.stringify({ code }),
   });
-  return responseData<ApiResult>(response, 'The verification code could not be confirmed.');
-}
-
-export async function acceptDeliveryRiderInvitation(token: string): Promise<ApiResult> {
-  const response = await apiPublicFetch('/delivery-rider-invitations/accept', {
-    method: 'POST',
-    body: JSON.stringify({ token }),
-  });
-  return responseData<ApiResult>(response, 'Could not activate the Delivery Rider account.');
+  return responseData<ApiResult>(
+    response,
+    'The verification code could not be confirmed.',
+  );
 }
 
 export async function getDeliveryRiderDashboard(): Promise<DeliveryRiderDashboard> {
@@ -137,6 +140,19 @@ export async function setDeliveryRiderAvailability(
     body: JSON.stringify({ available }),
   });
   return responseData<DeliveryRiderDashboard>(response, 'Could not update your availability.');
+}
+
+export async function updateDeliveryRiderOperationalLocation(
+  location: DeliveryRiderLocationUpdate,
+): Promise<{ recorded: boolean; receivedAt: string | null }> {
+  const response = await apiFetch('/delivery-rider/location', {
+    method: 'POST',
+    body: JSON.stringify(location),
+  });
+  return responseData<{ recorded: boolean; receivedAt: string | null }>(
+    response,
+    'Could not update your operational location.',
+  );
 }
 
 export async function acceptDeliveryOffer(offerId: string): Promise<DeliveryRiderDashboard> {

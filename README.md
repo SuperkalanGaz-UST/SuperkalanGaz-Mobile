@@ -13,8 +13,9 @@ Scope (the 5 confirmed modules, mobile slices):
 - **CSAT** — post-delivery star rating + complaint submission.
 - **Delivery Rider / SRD / Fleet** — accept a Branch Owner's identity-bound branch invitation
   through web or mobile onboarding, then use mobile to manage availability, accept or decline
-  assigned service-request offers, and update delivery milestones. SinoTrack ST-901 through
-  Traccar remains the authoritative live GPS source.
+  assigned service-request offers, share foreground phone location for dispatch, and update
+  delivery milestones. SinoTrack ST-901 through Traccar remains the authoritative vehicle
+  source for Fleet geofencing and PMS.
 
 All data access goes through the NestJS API (`superkalan-crm-api`) with a branch-scoped JWT.
 Supabase is used for **auth only** — never the data SDK (AGENTS.md §4).
@@ -144,9 +145,12 @@ acceptance flow.
 
 - Customer and Delivery Rider navigation must be separated by protected server-issued role claims;
   there are no SA/FA/BO/BM screens in this app.
-- Customers receive milestones only. Delivery Rider workflow actions do not make the phone the GPS
-  tracker and do not expose Traccar credentials; live vehicle positions continue to come
-  from SinoTrack ST-901 hardware through the NestJS API.
+- While a Delivery Rider is Available or On Delivery, the foreground app sends phone GPS to
+  the branch-scoped NestJS endpoint for Service Request and dispatch operations. Going Offline
+  stops collection and clears the dispatch-facing position.
+- Customers receive milestones only and never receive phone or vehicle coordinates. Phone GPS
+  does not drive Fleet geofencing or PMS; authoritative vehicle telemetry continues to come
+  from SinoTrack ST-901 hardware through Traccar and the NestJS API.
 - `src/lib/phMobile.ts` is a byte-for-byte copy of the web util; keep them in sync (AGENTS.md
   drift note). The API DTOs remain the real validation boundary.
 - Talk to the API only; branch scoping is enforced server-side.

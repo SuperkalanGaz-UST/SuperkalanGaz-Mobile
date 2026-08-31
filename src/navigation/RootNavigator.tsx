@@ -1,12 +1,10 @@
-import { useEffect, useState } from 'react';
-import { ActivityIndicator, Linking, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import { useAuth } from '@/contexts/AuthContext';
 import { PricingProvider } from '@/contexts/PricingContext';
 import { AuthFlow } from '@/navigation/AuthFlow';
 import { DeliveryRiderApp, UnsupportedMobileRoleScreen } from '@/navigation/DeliveryRiderApp';
 import { MainApp } from '@/navigation/MainApp';
-import { DeliveryRiderInvitationFlow } from '@/screens/driver/DeliveryRiderInvitationFlow';
-import { deliveryRiderInvitationToken } from '@/lib/deliveryRiderInvitationLink';
+import { DeliveryRiderMobileVerificationScreen } from '@/screens/driver/DeliveryRiderMobileVerificationScreen';
 import { colors } from '@/theme/colors';
 
 /**
@@ -16,38 +14,12 @@ import { colors } from '@/theme/colors';
  */
 export function RootNavigator() {
   const { session, sessionRole, initializing } = useAuth();
-  const [invitationToken, setInvitationToken] = useState<string | null>(null);
-
-  useEffect(() => {
-    const receiveInvitation = (url: string | null) => {
-      if (!url) return;
-      const token = deliveryRiderInvitationToken(url);
-      if (token) setInvitationToken(token);
-    };
-
-    void Linking.getInitialURL().then(receiveInvitation);
-    const subscription = Linking.addEventListener('url', ({ url }) => receiveInvitation(url));
-    return () => subscription.remove();
-  }, []);
 
   if (initializing) {
     return (
       <View style={styles.center}>
         <ActivityIndicator color={colors.primary} />
       </View>
-    );
-  }
-
-  // Invitation links must work even when Expo restores a different persisted
-  // session. The invitation remains server-validated and cannot alter scope.
-  if (invitationToken) {
-    return (
-      <DeliveryRiderInvitationFlow
-        token={invitationToken}
-        onToken={setInvitationToken}
-        onBack={() => setInvitationToken(null)}
-        onComplete={() => setInvitationToken(null)}
-      />
     );
   }
 
@@ -62,10 +34,14 @@ export function RootNavigator() {
   }
 
   if (sessionRole === 'driver') {
-    const active = String(session.user.app_metadata.status ?? '').toLowerCase() === 'active';
-    return active
-      ? <DeliveryRiderApp />
-      : <UnsupportedMobileRoleScreen message="Finish the secure Branch Owner invitation before accessing Delivery Rider operations." />;
+    const metadata = session.user.app_metadata;
+    const active = String(metadata.status ?? '').toLowerCase() === 'active';
+    const awaitingMobileVerification =
+      metadata.status === 'Pending' &&
+      typeof metadata.delivery_rider_invitation_accepted_at === 'string';
+    if (active) return <DeliveryRiderApp />;
+    if (awaitingMobileVerification) return <DeliveryRiderMobileVerificationScreen />;
+    return <UnsupportedMobileRoleScreen message="Finish creating and accepting your account from the invitation website first." />;
   }
 
   return (

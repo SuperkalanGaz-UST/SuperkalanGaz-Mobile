@@ -7,6 +7,7 @@ import {
 } from '@/components/driver/DeliveryRiderChrome';
 import { PrimaryButton } from '@/components/ui/controls';
 import { useAuth } from '@/contexts/AuthContext';
+import { useDeliveryRiderOperationalLocation } from '@/hooks/useDeliveryRiderOperationalLocation';
 import {
   acceptDeliveryOffer,
   declineDeliveryOffer,
@@ -39,6 +40,9 @@ export function DeliveryRiderApp() {
   const [refreshing, setRefreshing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const locationEnabled = dashboard?.deliveryRider.availability === 'Available'
+    || dashboard?.deliveryRider.availability === 'On Delivery';
+  const operationalLocation = useDeliveryRiderOperationalLocation(locationEnabled);
 
   const load = useCallback(async (refresh = false) => {
     refresh ? setRefreshing(true) : setLoading(true);
@@ -146,6 +150,8 @@ export function DeliveryRiderApp() {
           assignment={assignment}
           busy={busy}
           error={error}
+          locationMessage={operationalLocation.message}
+          locationActive={operationalLocation.state === 'tracking'}
           onStart={() => {
             if (!assignment) return;
             void runDashboardAction(() => startDelivery(assignment.serviceRequestId));
@@ -165,9 +171,16 @@ export function DeliveryRiderApp() {
         dashboard={dashboard}
         busy={busy}
         error={error}
+        locationMessage={operationalLocation.message}
+        locationActive={operationalLocation.state === 'tracking'}
         refreshing={refreshing}
         onRefresh={() => void load(true)}
-        onAvailability={(available) => void runDashboardAction(() => setDeliveryRiderAvailability(available))}
+        onAvailability={(available) => {
+          void (async () => {
+            if (available && !(await operationalLocation.ensurePermission())) return;
+            await runDashboardAction(() => setDeliveryRiderAvailability(available));
+          })();
+        }}
         onAcceptOffer={() => {
           if (!dashboard.currentOffer) return;
           void runDashboardAction(() => acceptDeliveryOffer(dashboard.currentOffer!.offerId)).then((accepted) => {

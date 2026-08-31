@@ -24,7 +24,7 @@
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": "Allow Superkalan Gaz to use your location to pin a delivery address."
+          "locationWhenInUsePermission": "Allow Superkalan Gaz to use your location to pin a delivery address and support Delivery Rider dispatch while the app is in use."
         }
       ],
       [

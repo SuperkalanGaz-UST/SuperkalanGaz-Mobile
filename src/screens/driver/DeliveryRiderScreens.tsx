@@ -120,6 +120,8 @@ export function DeliveryRiderHomeScreen({
   dashboard,
   busy,
   error,
+  locationMessage,
+  locationActive,
   refreshing,
   onRefresh,
   onAvailability,
@@ -130,6 +132,8 @@ export function DeliveryRiderHomeScreen({
   dashboard: DeliveryRiderDashboard;
   busy: boolean;
   error: string;
+  locationMessage: string;
+  locationActive: boolean;
   refreshing: boolean;
   onRefresh: () => void;
   onAvailability: (available: boolean) => void;
@@ -213,6 +217,11 @@ export function DeliveryRiderHomeScreen({
         </View>
 
         <View style={styles.infoNote}>
+          <Feather name="navigation" size={18} color={locationActive ? colors.success : colors.primary} />
+          <Text style={styles.infoNoteText}>{locationMessage}</Text>
+        </View>
+
+        <View style={styles.infoNote}>
           <Feather name="shield" size={18} color={colors.primary} />
           <Text style={styles.infoNoteText}>Only assigned offers appear here. You cannot browse or claim unoffered Service Requests.</Text>
         </View>
@@ -253,12 +262,16 @@ export function DeliveryRiderDeliveryScreen({
   assignment,
   busy,
   error,
+  locationMessage,
+  locationActive,
   onStart,
   onProof,
 }: {
   assignment: DeliveryAssignment | null;
   busy: boolean;
   error: string;
+  locationMessage: string;
+  locationActive: boolean;
   onStart: () => void;
   onProof: () => void;
 }) {
@@ -296,8 +309,8 @@ export function DeliveryRiderDeliveryScreen({
               <PrimaryButton label={busy ? 'Starting delivery…' : 'Start delivery'} onPress={onStart} disabled={busy} />
             )}
             <View style={styles.infoNote}>
-              <Feather name="info" size={18} color={colors.primary} />
-              <Text style={styles.infoNoteText}>Your milestone updates do not use the phone as the authoritative vehicle GPS source.</Text>
+              <Feather name="navigation" size={18} color={locationActive ? colors.success : colors.primary} />
+              <Text style={styles.infoNoteText}>{locationMessage} SinoTrack ST-901 remains authoritative for vehicle geofencing and PMS.</Text>
             </View>
           </>
         )}

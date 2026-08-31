@@ -39,7 +39,6 @@ export function LoginScreen({
   onInputChange,
   onForgot,
   onSignUp,
-  onDeliveryRiderInvitation,
 }: {
   account: AccountType;
   input: InputMode;
@@ -48,10 +47,10 @@ export function LoginScreen({
   onInputChange: (v: InputMode) => void;
   onForgot: () => void;
   onSignUp: () => void;
-  onDeliveryRiderInvitation: () => void;
 }) {
   const insets = useSafeAreaInsets();
-  const { signIn, signInWithPhone } = useAuth();
+  const { signIn, signInWithPhone, signInDeliveryRider } = useAuth();
+  const [deliveryRiderMode, setDeliveryRiderMode] = useState(false);
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
@@ -60,12 +59,12 @@ export function LoginScreen({
 
   const handleSignIn = async () => {
     const e: typeof errors = {};
-    if (input === 'email' && !email.trim()) e.email = 'Email is required';
-    if (input === 'phone' && !phone.trim()) e.phone = 'Phone number is required';
+    if ((deliveryRiderMode || input === 'email') && !email.trim()) e.email = 'Email is required';
+    if (!deliveryRiderMode && input === 'phone' && !phone.trim()) e.phone = 'Phone number is required';
     if (!password.trim()) e.password = 'Password is required';
 
     let normalizedPhone: string | null = null;
-    if (input === 'phone' && phone.trim()) {
+    if (!deliveryRiderMode && input === 'phone' && phone.trim()) {
       normalizedPhone = normalizePhMobile(phone);
       if (!normalizedPhone) e.phone = 'Enter a valid PH mobile number';
     }
@@ -73,8 +72,9 @@ export function LoginScreen({
     if (Object.keys(e).length > 0) return;
 
     setBusy(true);
-    const { error } =
-      input === 'email'
+    const { error } = deliveryRiderMode
+      ? await signInDeliveryRider(email.trim(), password)
+      : input === 'email'
         ? await signIn(email.trim(), password, account)
         : await signInWithPhone(normalizedPhone as string, password, account);
     setBusy(false);
@@ -98,23 +98,33 @@ export function LoginScreen({
 
         <View style={styles.card}>
           <View style={styles.headings}>
-            <Text style={styles.title}>Welcome back!</Text>
-            <Text style={styles.subtitle}>Sign in to continue to your account</Text>
+            <Text style={styles.title}>
+              {deliveryRiderMode ? 'Delivery Rider Login' : 'Welcome back!'}
+            </Text>
+            <Text style={styles.subtitle}>
+              {deliveryRiderMode
+                ? 'Sign in with your Delivery Rider account'
+                : 'Sign in to continue to your account'}
+            </Text>
             {notice ? <Text style={styles.notice}>{notice}</Text> : null}
           </View>
 
-          <AccountTypeTabs value={account} onChange={onAccountChange} />
+          {!deliveryRiderMode ? (
+            <AccountTypeTabs value={account} onChange={onAccountChange} />
+          ) : null}
 
-          <EmailPhoneToggle
-            value={input}
-            onChange={(v) => {
-              onInputChange(v);
-              setErrors({});
-            }}
-          />
+          {!deliveryRiderMode ? (
+            <EmailPhoneToggle
+              value={input}
+              onChange={(v) => {
+                onInputChange(v);
+                setErrors({});
+              }}
+            />
+          ) : null}
 
           <View style={{ gap: 16 }}>
-            {input === 'email' ? (
+            {deliveryRiderMode || input === 'email' ? (
               <TextField
                 label="Email Address"
                 placeholder="Email Address"
@@ -152,25 +162,36 @@ export function LoginScreen({
           <PrimaryButton label={busy ? 'Signing in…' : 'Sign in'} onPress={handleSignIn} disabled={busy} />
 
           <Pressable
-            onPress={onDeliveryRiderInvitation}
-            style={({ pressed }) => [styles.driverInvite, pressed && styles.pressed]}
+            onPress={() => {
+              setDeliveryRiderMode((current) => !current);
+              setErrors({});
+            }}
+            style={({ pressed }) => [styles.driverLogin, pressed && styles.pressed]}
           >
             <View style={styles.driverIcon}>
-              <Feather name="truck" size={19} color={colors.primary} />
+              <Feather name={deliveryRiderMode ? 'user' : 'truck'} size={19} color={colors.primary} />
             </View>
             <View style={styles.driverCopy}>
-              <Text style={styles.driverTitle}>Register as Delivery Rider</Text>
-              <Text style={styles.driverSubtitle}>Use your Branch Owner invitation</Text>
+              <Text style={styles.driverTitle}>
+                {deliveryRiderMode ? 'Back to Customer Login' : 'Login as Delivery Rider'}
+              </Text>
+              <Text style={styles.driverSubtitle}>
+                {deliveryRiderMode
+                  ? 'Use your Household or Commercial account'
+                  : 'Use the account created from your Branch Owner invitation'}
+              </Text>
             </View>
             <Feather name="chevron-right" size={19} color={colors.primary} />
           </Pressable>
 
-          <Text style={styles.signupRow}>
-            Don't have an account?{' '}
-            <Text style={styles.signupLink} onPress={onSignUp}>
-              Sign Up
+          {!deliveryRiderMode ? (
+            <Text style={styles.signupRow}>
+              Don't have an account?{' '}
+              <Text style={styles.signupLink} onPress={onSignUp}>
+                Sign Up
+              </Text>
             </Text>
-          </Text>
+          ) : null}
         </View>
       </ScrollView>
     </KeyboardAvoidingView>
@@ -198,12 +219,12 @@ const styles = StyleSheet.create({
   forgotWrap: { alignSelf: 'flex-end', marginTop: 4 },
   forgot: { fontFamily: fonts.regular, fontSize: 12, color: colors.primary, textDecorationLine: 'underline' },
   formError: { fontFamily: fonts.regular, fontSize: 12, color: colors.danger, textAlign: 'center' },
-  driverInvite: { flexDirection: 'row', alignItems: 'center', gap: 11, padding: 12, borderRadius: 14, borderWidth: 1, borderColor: '#CFE7F6', backgroundColor: colors.primaryTint },
+  driverLogin: { flexDirection: 'row', alignItems: 'center', gap: 11, padding: 12, borderRadius: 14, borderWidth: 1, borderColor: '#CFE7F6', backgroundColor: colors.primaryTint },
   driverIcon: { width: 38, height: 38, borderRadius: 19, backgroundColor: colors.surface, alignItems: 'center', justifyContent: 'center' },
   driverCopy: { flex: 1 },
   driverTitle: { fontFamily: fonts.semibold, fontSize: 12, color: colors.darkNavy },
   driverSubtitle: { fontFamily: fonts.regular, fontSize: 10, color: colors.textMuted, marginTop: 2 },
-  pressed: { opacity: 0.75 },
+  pressed: { opacity: 0.85 },
   signupRow: { textAlign: 'center', fontFamily: fonts.regular, fontSize: 11, color: colors.footerText },
   signupLink: { fontFamily: fonts.regular, fontSize: 11, color: colors.signupLink, textDecorationLine: 'underline' },
 });
