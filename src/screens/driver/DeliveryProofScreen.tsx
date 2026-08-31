@@ -9,12 +9,47 @@ import {
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
+import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import { DeliveryRiderHeader } from '@/components/driver/DeliveryRiderChrome';
 import { PrimaryButton } from '@/components/ui/controls';
 import type { DeliveryAssignment, DeliveryProofPhoto } from '@/lib/deliveryRiderApi';
 import { colors } from '@/theme/colors';
 import { fonts } from '@/theme/fonts';
 import { cardShadow } from '@/theme/metrics';
+
+const MAX_PROOF_BYTES = 3 * 1024 * 1024;
+const MAX_PROOF_EDGE = 1600;
+
+async function compressProofPhoto(asset: ImagePicker.ImagePickerAsset): Promise<DeliveryProofPhoto> {
+  const longestEdge = Math.max(asset.width ?? 0, asset.height ?? 0);
+  const resize = longestEdge > MAX_PROOF_EDGE
+    ? asset.width >= asset.height
+      ? { resize: { width: MAX_PROOF_EDGE } }
+      : { resize: { height: MAX_PROOF_EDGE } }
+    : null;
+
+  // Base64 is requested only to measure the compressed output before upload.
+  // The file URI is still used for FormData, so the image is not sent twice.
+  for (const compress of [0.7, 0.55, 0.4, 0.25]) {
+    const result = await manipulateAsync(
+      asset.uri,
+      resize ? [resize] : [],
+      { compress, format: SaveFormat.JPEG, base64: true },
+    );
+    const estimatedBytes = result.base64
+      ? Math.ceil(result.base64.length * 0.75)
+      : Number.POSITIVE_INFINITY;
+    if (estimatedBytes <= MAX_PROOF_BYTES) {
+      return {
+        uri: result.uri,
+        fileName: `delivery-proof-${Date.now()}.jpg`,
+        mimeType: 'image/jpeg',
+      };
+    }
+  }
+
+  throw new Error('The photo is still larger than 3 MB. Choose a smaller image.');
+}
 
 function InlineError({ message }: { message: string }) {
   return (
@@ -53,30 +88,29 @@ export function DeliveryProofScreen({
       return;
     }
 
-    const result = source === 'camera'
-      ? await ImagePicker.launchCameraAsync({
-          mediaTypes: ['images'],
-          quality: 0.75,
-          allowsEditing: false,
-        })
-      : await ImagePicker.launchImageLibraryAsync({
-          mediaTypes: ['images'],
-          quality: 0.75,
-          allowsEditing: false,
-        });
+    try {
+      const result = source === 'camera'
+        ? await ImagePicker.launchCameraAsync({
+            mediaTypes: ['images'],
+            quality: 0.75,
+            allowsEditing: false,
+          })
+        : await ImagePicker.launchImageLibraryAsync({
+            mediaTypes: ['images'],
+            quality: 0.75,
+            allowsEditing: false,
+          });
 
-    if (result.canceled || !result.assets[0]) return;
-    const asset = result.assets[0];
-    setPhoto({
-      uri: asset.uri,
-      fileName: asset.fileName ?? `delivery-proof-${Date.now()}.jpg`,
-      mimeType: asset.mimeType ?? 'image/jpeg',
-    });
+      if (result.canceled || !result.assets[0]) return;
+      setPhoto(await compressProofPhoto(result.assets[0]));
+    } catch (error) {
+      setPickerError(error instanceof Error ? error.message : 'Could not prepare the photo.');
+    }
   };
 
   return (
     <View style={styles.screen}>
-      <DeliveryRiderHeader title="Proof of delivery" subtitle={assignment.referenceNumber} onBack={onBack} />
+      <DeliveryRiderHeader title="Proof of delivery" subtitle={assignment.srCode} onBack={onBack} />
       <ScrollView contentContainerStyle={styles.scroll}>
         <View style={styles.headingCopy}>
           <Text style={styles.title}>{photo ? 'Review the delivery photo' : 'Add a delivery photo'}</Text>
@@ -154,7 +188,7 @@ export function DeliveryCompletedScreen({
 }) {
   return (
     <View style={styles.screen}>
-      <DeliveryRiderHeader title="Delivery complete" subtitle={assignment.referenceNumber} />
+      <DeliveryRiderHeader title="Delivery complete" subtitle={assignment.srCode} />
       <View style={styles.completedBody}>
         <View style={styles.completedCard}>
           <View style={styles.completedIcon}><Feather name="check" size={40} color={colors.success} /></View>
@@ -168,7 +202,7 @@ export function DeliveryCompletedScreen({
             <Text style={styles.completedLabel}>Customer</Text>
             <Text style={styles.completedValue}>{assignment.customerName}</Text>
             <Text style={styles.completedLabel}>Service Request</Text>
-            <Text style={styles.completedValue}>{assignment.referenceNumber}</Text>
+            <Text style={styles.completedValue}>{assignment.srCode}</Text>
           </View>
           <PrimaryButton label="Return home" onPress={onDone} />
         </View>

@@ -31,7 +31,7 @@ export interface DeliveryVehicle {
 
 export interface DeliveryAssignment {
   serviceRequestId: string;
-  referenceNumber: string;
+  srCode: string;
   customerName: string;
   deliveryAddress: string;
   cylinderSize: string;

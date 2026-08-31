@@ -54,7 +54,7 @@ function InlineError({ message }: { message: string }) {
 function AssignmentDetails({ assignment }: { assignment: DeliveryAssignment | DeliveryOffer['assignment'] }) {
   return (
     <View style={styles.detailsCard}>
-      <DetailRow icon="hash" label="Service Request" value={assignment.referenceNumber} />
+      <DetailRow icon="hash" label="Service Request" value={assignment.srCode} />
       <DetailRow icon="user" label="Customer" value={assignment.customerName} />
       <DetailRow icon="map-pin" label="Delivery address" value={assignment.deliveryAddress} />
       <DetailRow icon="box" label="Order" value={`${assignment.quantity} × ${assignment.cylinderSize}`} />
@@ -290,7 +290,7 @@ export function DeliveryRiderDeliveryScreen({
             <View style={styles.referenceHeading}>
               <View>
                 <Text style={styles.cardEyebrow}>Service Request</Text>
-                <Text style={styles.referenceNumber}>{assignment.referenceNumber}</Text>
+                <Text style={styles.referenceNumber}>{assignment.srCode}</Text>
               </View>
               <View style={styles.activePill}><Text style={styles.activePillText}>{assignment.inTransitAt ? 'In Transit' : 'Dispatched'}</Text></View>
             </View>
