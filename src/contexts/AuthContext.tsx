@@ -138,15 +138,8 @@ interface AuthContextValue {
   accountType: AccountType | null;
   /** True until the initial session has been restored from storage. */
   initializing: boolean;
-  signIn: (email: string, password: string, accountType: AccountType) => Promise<{ error: string | null }>;
-  /** Phone sign-in. `phone` must be canonical E.164 (`+639XXXXXXXXX`). */
-  signInWithPhone: (
-    phone: string,
-    password: string,
-    accountType: AccountType,
-  ) => Promise<{ error: string | null }>;
-  /** Sign in after the website has accepted a Delivery Rider invitation. */
-  signInDeliveryRider: (email: string, password: string) => Promise<{ error: string | null }>;
+  /** Unified customer/Delivery Rider sign-in; the server-owned role and track route the app. */
+  signIn: (identifier: string, password: string) => Promise<{ error: string | null }>;
   /** Refresh protected Auth claims after app-based Delivery Rider mobile verification. */
   refreshSession: () => Promise<{ error: string | null }>;
   /**
@@ -246,14 +239,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo<AuthContextValue>(() => {
-    // Shared by both sign-in methods: record the chosen account type up front so
-    // the app routes to the right home the instant the session lands, and persist
-    // it only once the credentials actually check out.
+    // The authenticated user's protected claims decide both role and customer
+    // track. The login form never asks the user to choose either one.
     const runSignIn = async (
       credentials: { email: string; password: string } | { phone: string; password: string },
       chosenType: AccountType | null,
     ): Promise<{ error: string | null }> => {
       setAccountType(chosenType);
+      if (!chosenType) await AsyncStorage.removeItem(ACCOUNT_TYPE_KEY);
       const { error } = await supabase.auth.signInWithPassword(credentials);
       if (error) return { error: error.message };
 
@@ -291,23 +284,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return { error: 'This staff role is available on the web dashboard, not the mobile app.' };
       }
 
-      if (!chosenType) {
+      const prepared = await ensureCustomerSession(data.session);
+      if (prepared.error) {
         await supabase.auth.signOut();
         setSession(null);
         setAccountType(null);
-        return { error: 'Use the Household or Commercial login for this customer account.' };
+        return { error: prepared.error };
       }
-
-      const prepared = await ensureCustomerSession(data.session);
-      if (prepared.error) return { error: prepared.error };
       const serverType = accountTypeFromSession(prepared.session);
-      if (!serverType) return { error: 'This customer account has no loyalty track.' };
+      if (!serverType) {
+        await supabase.auth.signOut();
+        setSession(null);
+        setAccountType(null);
+        return { error: 'This customer account has no loyalty track.' };
+      }
+      // Signup recovery still knows which track the user selected. Normal
+      // sign-in passes null and relies entirely on the protected claim.
       if (chosenType && serverType !== chosenType) {
         await supabase.auth.signOut();
         setSession(null);
         setAccountType(null);
         return {
-          error: `This is a ${serverType === 'household' ? 'Household' : 'Commercial'} account. Select the matching sign-in tab.`,
+          error: `This account uses the ${serverType === 'household' ? 'Household' : 'Commercial'} track.`,
         };
       }
       setSession(prepared.session);
@@ -321,9 +319,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       sessionRole: mobileRoleFromSession(session),
       accountType,
       initializing,
-      signIn: (email, password, type) => runSignIn({ email, password }, type),
-      signInWithPhone: (phone, password, type) => runSignIn({ phone, password }, type),
-      signInDeliveryRider: (email, password) => runSignIn({ email, password }, null),
+      signIn: async (identifier, password) => {
+        const value = identifier.trim();
+        if (value.includes('@')) {
+          return runSignIn({ email: value.toLowerCase(), password }, null);
+        }
+
+        const phone = normalizePhMobile(value);
+        if (!phone) return { error: 'Enter a valid email or PH mobile number.' };
+        return runSignIn({ phone, password }, null);
+      },
       refreshSession: async () => {
         const { data, error } = await supabase.auth.refreshSession();
         if (error || !data.session) {

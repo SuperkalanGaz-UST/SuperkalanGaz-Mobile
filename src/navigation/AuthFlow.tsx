@@ -125,11 +125,7 @@ export function AuthFlow() {
       default:
         return (
           <LoginScreen
-            account={account}
-            input={input}
             notice={notice}
-            onAccountChange={setAccount}
-            onInputChange={setInput}
             onForgot={() => {
               setNotice('');
               setScreen('forgot');
