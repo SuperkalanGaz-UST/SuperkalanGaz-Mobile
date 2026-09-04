@@ -73,6 +73,16 @@ type CustomerLoyaltyPayload = {
   active_redemptions?: LoyaltyRedemptionRow[];
 };
 
+function uniqueCatalogItems(items: LoyaltyCatalogItem[]): LoyaltyCatalogItem[] {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const key = `${item.branch_id}:${item.name.trim().toLocaleLowerCase()}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 export function HomeScreen({
   initialTab = 'home',
   showGuide = false,
@@ -153,7 +163,7 @@ export function HomeScreen({
 
       if (catResult.status === 'fulfilled' && catResult.value.ok) {
         const catData = (await catResult.value.json()) as { catalogItems?: LoyaltyCatalogItem[] };
-        setCatalog(catData.catalogItems ?? []);
+        setCatalog(uniqueCatalogItems(catData.catalogItems ?? []));
       } else if (catResult.status === 'fulfilled') {
         errors.push(`Catalog ${catResult.value.status}`);
       } else {
