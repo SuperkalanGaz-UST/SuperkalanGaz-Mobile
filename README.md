@@ -73,11 +73,12 @@ cp .env.example .env                # then fill in API + Supabase values
 npx expo start
 ```
 
-## Google SMTP for email verification codes
+## Google SMTP for password recovery and invitations
 
-Supabase Auth owns signup-code generation and verification. Google SMTP is
-configured in Supabase rather than in this mobile app, so the Google password is
-never bundled into the Expo build.
+Supabase Auth owns password-recovery code generation and verification. Google
+SMTP is configured in Supabase rather than in this mobile app, so the Google
+password is never bundled into the Expo build. Customer accounts are provisioned
+outside the mobile app; there is no customer signup or signup OTP flow here.
 
 1. Turn on 2-Step Verification for the Google or Google Workspace sender account,
    then create an App Password for Supabase.
@@ -89,20 +90,7 @@ never bundled into the Expo build.
    - Password: the 16-character Google App Password (not the normal account password)
    - Sender email: the same Google email address
    - Sender name: `Superkalan Gaz`
-3. Keep email confirmation enabled. Under **Authentication → Email Templates → Confirm signup**,
-   make the template display the OTP with `{{ .Token }}`. For example:
-
-   ```html
-   <h2>Verify your Superkalan Gaz account</h2>
-   <p>Your verification code is:</p>
-   <p style="font-size: 32px; font-weight: 700; letter-spacing: 8px;">{{ .Token }}</p>
-   <p>If you did not create this account, you can ignore this email.</p>
-   ```
-4. Under **Authentication → Sign In / Providers → Email**, set **Email OTP length** to
-   `6`. This must match the mobile app's six-box OTP input. The equivalent Management API
-   setting is `mailer_otp_length: 6`.
-
-5. Under **Authentication → Email Templates → Reset password**, make the shared recovery
+3. Under **Authentication → Email Templates → Reset password**, make the shared recovery
    template code-only. Both mobile and web verify this value with Supabase's `recovery`
    OTP type. Do not include `{{ .ConfirmationURL }}` in this template:
 
@@ -113,7 +101,7 @@ never bundled into the Expo build.
    <p>If you did not request a password reset, you can ignore this email.</p>
    ```
 
-6. Under **Authentication → Email Templates → Invite user**, keep invitations link-only.
+4. Under **Authentication → Email Templates → Invite user**, keep invitations link-only.
    Invitation acceptance proves the invited identity and must use the single-use URL:
 
    ```html
@@ -122,8 +110,8 @@ never bundled into the Expo build.
    <p>If you were not expecting this invitation, you can ignore this email.</p>
    ```
 
-The resulting delivery rule is: signup verification and password recovery use codes;
-Franchise Administrator and Delivery Rider invitations use single-use links.
+The resulting delivery rule is: password recovery uses email codes; Franchise
+Administrator and Delivery Rider invitations use single-use links.
 
 For Delivery Rider onboarding, also enable a supported Supabase Phone provider. In local
 custom-scheme development, allow `superkalan://delivery-rider-invitation**`. For laptop or
@@ -131,9 +119,7 @@ production web onboarding, allow the configured HTTPS/LAN
 `/delivery-rider-invitation**` route. The API sends the SMS OTP only after the recipient
 opens the verified email invitation and creates their private password in either client.
 
-The mobile sign-up flow calls `signUp` before opening the OTP screen, verifies
-the entered code with `verifyOtp`, and supports requesting a fresh code. No SMTP
-credential belongs in `.env`, `.env.example`, or client-side TypeScript.
+No SMTP credential belongs in `.env`, `.env.example`, or client-side TypeScript.
 
 ## Delivery Rider journey
 

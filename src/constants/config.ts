@@ -13,10 +13,18 @@ const configuredApiUrl = (
 ).replace(/\/$/, '');
 
 // On a physical phone, localhost is the phone itself. During LAN development,
-// Expo exposes the computer's IPv4 host in hostUri, so reuse it for the API
-// without forcing every developer to edit .env when their LAN address changes.
-const expoDevHost = Constants.expoConfig?.hostUri?.split(':')[0];
-const isLanIpv4 = expoDevHost !== undefined && /^(?:\d{1,3}\.){3}\d{1,3}$/.test(expoDevHost);
+// Expo Go exposes the computer's host as debuggerHost; the CLI may expose the
+// same value as expoConfig.hostUri. Use either value so the API follows the
+// machine running Expo without forcing every developer to edit .env.
+function ipv4FromExpoHost(value: string | undefined): string | undefined {
+  const candidate = value?.replace(/^[^/]+:\/\//, '').split('/')[0].split(':')[0];
+  return candidate && /^(?:\d{1,3}\.){3}\d{1,3}$/.test(candidate) ? candidate : undefined;
+}
+
+const expoDevHost =
+  ipv4FromExpoHost(Constants.expoConfig?.hostUri) ??
+  ipv4FromExpoHost(Constants.expoGoConfig?.debuggerHost);
+const isLanIpv4 = expoDevHost !== undefined;
 const mobileReachableApiUrl =
   __DEV__ && isLanIpv4
     ? configuredApiUrl.replace(/^(https?:\/\/)(localhost|127\.0\.0\.1)/, `$1${expoDevHost}`)

@@ -9,29 +9,13 @@ import type { AccountType } from '@/contexts/AuthContext';
 
 export type { AccountType };
 
-export type InputMode = 'email' | 'phone';
-export type OtpVariant = 'email' | 'phone' | 'sms';
-
 // ── Auth flow ────────────────────────────────────────────────────────────────
 export type AuthScreen =
   | 'login'
-  | 'signup'
-  | 'otp'
   | 'forgot'
   | 'forgot-check'
   | 'set-password'
   | 'success';
-
-/** Data threaded through the signup → OTP → account-creation sequence. */
-export interface SignupDraft {
-  firstName: string;
-  lastName: string;
-  address: string;
-  contact: string;
-  password: string;
-  accountType: AccountType;
-  input: InputMode;
-}
 
 // ── Main app ─────────────────────────────────────────────────────────────────
 export type MainScreen = 'home' | 'orders' | 'more' | 'profile' | 'order-process' | 'faqs';

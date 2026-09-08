@@ -78,7 +78,7 @@ Import as `import { colors } from '@/theme/colors'`. Grouped by role:
 
 **Contextual groups** (scoped to a surface — see `colors.ts` for the full set):
 - **Login** (`loginBackground`, `heading` `#044674`, `label` `#002540`, `placeholder`,
-  `inputBorder`, `segmentTrack`, `signupLink`, `scrim`).
+  `inputBorder`).
 - **Home / loyalty** (`helloAccent` `#81D1FF`, `pointsTop`→`pointsBottom` gradient,
   `homeSheet`, `claimBtn`, `detailsBtn`, `activeFooter`, `activeCardBorder`,
   `navInactive` `#9DB2CE`).
@@ -184,8 +184,7 @@ Shared primitives now live in `src/components/ui/`. Reuse them; don't re-style e
     border `danger`; trailing eye toggle for `secure`. `bare` variant = pale-blue auth fill.
   - `PhoneField` — fixed non-editable `+63` prefix element per AGENTS.md §16 (never
     placeholder text); user types the 10-digit subscriber number.
-  - `EmailPhoneToggle` / `AccountTypeTabs` — segmented controls with a sliding thumb/underline.
-  - `OtpInput` — six auto-advancing 1-char boxes.
+  - `OtpInput` — six auto-advancing 1-char boxes used by password recovery and Delivery Rider activation.
 - **Header + shell** — `AppHeader` (blue greeting bar, safe-area aware, help + menu actions)
   over a white sheet (`marginTop: -24`, radius `24`); `BottomNav` (floating bar with
   Home / Rewards / History / More destinations plus a raised center cylinder action labeled
@@ -210,7 +209,7 @@ Shared primitives now live in `src/components/ui/`. Reuse them; don't re-style e
 - **Session-gated state machines** (not React Navigation). `RootNavigator.tsx` reads the real
   Supabase session and mounts one of two lightweight `useState` screen-enum machines that
   mirror the Figma Make prototype's `onNavigate` reducer:
-  - `AuthFlow.tsx` (signed out) → `login · signup · otp · forgot · forgot-check ·
+  - `AuthFlow.tsx` (signed out) → `login · forgot · forgot-check ·
     set-password · success`.
   - `MainApp.tsx` (signed in) → `home · orders · profile · order-process · faqs` (Home owns an
     internal `home | rewards` tab). A successful sign-in/up or sign-out flips the session and
@@ -254,14 +253,14 @@ Shared primitives now live in `src/components/ui/`. Reuse them; don't re-style e
 | `src/theme/colors.ts` | Color tokens — brand + extended Figma palette (§2) |
 | `src/theme/fonts.ts` | Poppins `fontMap` + `fonts` (§3) |
 | `src/theme/metrics.ts` | `spacing` · `radii` · `cardShadow` · `navShadow` (§4–§5) |
-| `src/navigation/types.ts` | Screen/tab enums + `SignupDraft` shared by both machines |
+| `src/navigation/types.ts` | Screen/tab enums shared by both machines |
 | `src/navigation/RootNavigator.tsx` | Session gate → `AuthFlow` or `MainApp` (§8) |
-| `src/navigation/AuthFlow.tsx` | Signed-out state machine (login/signup/OTP/forgot) (§8) |
+| `src/navigation/AuthFlow.tsx` | Signed-out state machine (login/forgot) (§8) |
 | `src/navigation/MainApp.tsx` | Signed-in state machine (home/orders/profile/order/faqs) (§8) |
-| `src/components/ui/controls.tsx` | **Reference:** buttons, `TextField`, `PhoneField`, toggles, `OtpInput` (§7) |
+| `src/components/ui/controls.tsx` | **Reference:** buttons, `TextField`, `PhoneField`, and `OtpInput` (§7) |
 | `src/components/ui/AppHeader.tsx` · `BottomNav.tsx` · `SideMenu.tsx` | Shared shell (§7–§8) |
 | `src/components/ui/overlays.tsx` · `AppGuide.tsx` | Confirm/promo/toast modals + app tour (§7) |
-| `src/screens/auth/*` | `LoginScreen` (wired to `AuthContext`), `SignUpScreen`, `OtpScreen`, `ForgotFlow` |
+| `src/screens/auth/*` | `LoginScreen` (wired to `AuthContext`) and `ForgotFlow` |
 | `src/screens/home/HomeScreen.tsx` · `RewardsScreen.tsx` | Home (points/reorder/quick-order) + Rewards surface |
 | `src/screens/orders/OrdersScreen.tsx` | Orders list/details + post-delivery CSAT feedback |
 | `src/screens/order/OrderProcessScreen.tsx` | Order flow: select → review → track (+ address/schedule/payment/confirm sheets) |

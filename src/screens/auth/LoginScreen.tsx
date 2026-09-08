@@ -29,11 +29,9 @@ import {
 export function LoginScreen({
   notice,
   onForgot,
-  onSignUp,
 }: {
   notice?: string;
   onForgot: () => void;
-  onSignUp: () => void;
 }) {
   const insets = useSafeAreaInsets();
   const { signIn } = useAuth();
@@ -44,11 +42,11 @@ export function LoginScreen({
 
   const handleSignIn = async () => {
     const e: typeof errors = {};
-    if (!identifier.trim()) e.identifier = 'Email or mobile number is required';
+    if (!identifier.trim()) e.identifier = 'Email is required';
     if (!password.trim()) e.password = 'Password is required';
 
     if (identifier.trim() && !identifier.includes('@') && !normalizePhMobile(identifier)) {
-      e.identifier = 'Enter a valid email or PH mobile number';
+      e.identifier = 'Enter a valid email address';
     }
     setErrors(e);
     if (Object.keys(e).length > 0) return;
@@ -71,7 +69,12 @@ export function LoginScreen({
         keyboardShouldPersistTaps="handled"
       >
         <View style={styles.logoWrap}>
-          <Image source={images.logo} style={styles.logo} resizeMode="contain" />
+          <Image
+            source={images.logo}
+            style={styles.logo}
+            resizeMode="contain"
+            accessibilityLabel="Superkalan Gaz"
+          />
         </View>
 
         <View style={styles.card}>
@@ -83,9 +86,10 @@ export function LoginScreen({
 
           <View style={{ gap: 16 }}>
             <TextField
-              label="Email or mobile number"
-              placeholder="Email or mobile number"
+              label="Email Address"
+              placeholder="Email Address"
               value={identifier}
+              keyboardType="email-address"
               onChangeText={(value) => {
                 setIdentifier(value);
                 setErrors((current) => ({ ...current, identifier: undefined, form: undefined }));
@@ -112,13 +116,6 @@ export function LoginScreen({
           {errors.form ? <Text style={styles.formError}>{errors.form}</Text> : null}
 
           <PrimaryButton label={busy ? 'Signing in…' : 'Sign in'} onPress={handleSignIn} disabled={busy} />
-
-          <Text style={styles.signupRow}>
-            Don't have an account?{' '}
-            <Text style={styles.signupLink} onPress={onSignUp}>
-              Sign Up
-            </Text>
-          </Text>
         </View>
       </ScrollView>
     </KeyboardAvoidingView>
@@ -128,16 +125,21 @@ export function LoginScreen({
 const styles = StyleSheet.create({
   flex: { flex: 1, backgroundColor: colors.authBg },
   scroll: { flexGrow: 1, paddingHorizontal: 20 },
-  logoWrap: { alignItems: 'center', paddingVertical: 24 },
-  logo: { width: 190, height: 90 },
+  logoWrap: { alignItems: 'center', paddingTop: 20, paddingBottom: 24 },
+  logo: { width: 220, height: 158 },
   card: {
     backgroundColor: '#fff',
-    borderRadius: 20,
+    borderRadius: 24,
+    marginHorizontal: 8,
     paddingHorizontal: 24,
     paddingTop: 24,
     paddingBottom: 32,
     gap: 20,
     ...cardShadow,
+    shadowOpacity: 0.16,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 5,
   },
   headings: { alignItems: 'center' },
   title: { fontFamily: fonts.bold, fontSize: 24, color: colors.heading },
@@ -146,6 +148,4 @@ const styles = StyleSheet.create({
   forgotWrap: { alignSelf: 'flex-end', marginTop: 4 },
   forgot: { fontFamily: fonts.regular, fontSize: 12, color: colors.primary, textDecorationLine: 'underline' },
   formError: { fontFamily: fonts.regular, fontSize: 12, color: colors.danger, textAlign: 'center' },
-  signupRow: { textAlign: 'center', fontFamily: fonts.regular, fontSize: 11, color: colors.footerText },
-  signupLink: { fontFamily: fonts.regular, fontSize: 11, color: colors.signupLink, textDecorationLine: 'underline' },
 });

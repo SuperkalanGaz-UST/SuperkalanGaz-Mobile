@@ -288,7 +288,7 @@ const styles = StyleSheet.create({
   caption: { fontFamily: fonts.regular, fontSize: 12, color: colors.grayText, textAlign: 'center' },
   strong: { fontFamily: fonts.semibold, fontSize: 16, color: colors.label, textAlign: 'center', marginTop: 8, marginBottom: 4 },
   resend: { textAlign: 'center', fontFamily: fonts.regular, fontSize: 11, color: colors.grayText, marginTop: 12 },
-  resendLink: { color: colors.signupLink, textDecorationLine: 'underline' },
+  resendLink: { color: colors.primary, textDecorationLine: 'underline' },
   resendLinkDisabled: { color: colors.grayText, textDecorationLine: 'none' },
   formError: {
     fontFamily: fonts.regular,

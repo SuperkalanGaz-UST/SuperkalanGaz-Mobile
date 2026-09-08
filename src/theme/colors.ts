@@ -26,14 +26,6 @@ export const colors = {
   placeholder: '#B5C5CF', // input placeholder text
   tabInactive: '#989898', // "Commercial" tab
   inputBorder: '#E6EDF1', // input outline
-  segmentTrack: '#F4F5F6', // Email/Phone segmented track
-  footerText: '#193028', // "Don't have an account?"
-  signupLink: '#2D7DEE', // "Sign Up"
-
-  // Dark tint layered over the sign-up sheet's blur. Stands on its own so the
-  // backdrop still reads as dimmed on Android, where BlurView is weak/absent.
-  scrim: 'rgba(2,20,34,0.45)',
-
   // --- Home / Quick Order (Figma landing) ---
   helloAccent: '#81D1FF', // the customer's first name in the header greeting
   pointsTop: '#044674', // points card gradient — top (dark)
@@ -55,7 +47,6 @@ export const colors = {
   cardBorder: '#D9D9D9', // generic card / input outline
   divider: '#F1F1F1', // thin section dividers
   dividerStrong: '#D9D9D9', // stronger separators inside cards
-  segmentBg: '#FAFAFA', // Email/Phone segmented-control track
   muted: '#989898', // inactive tab / disabled text
   grayText: '#7D7F7E', // secondary body text
   gray: '#757575', // tertiary text / icons

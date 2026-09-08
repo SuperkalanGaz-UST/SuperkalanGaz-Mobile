@@ -18,7 +18,8 @@ import { colors } from '@/theme/colors';
 import { fonts } from '@/theme/fonts';
 import { cylinderFor } from '@/lib/assets';
 import { apiFetch } from '@/lib/api';
-import { AppHeader } from '@/components/ui/AppHeader';
+import { API_URL } from '@/constants/config';
+import { AccountMenuButton, AppHeader } from '@/components/ui/AppHeader';
 import { BottomNav } from '@/components/ui/BottomNav';
 import { AppRefreshControl } from '@/components/ui/AppRefreshControl';
 import { AppGuideOverlay, GUIDE_STEP_COUNT, type GuideRect } from '@/components/ui/AppGuide';
@@ -81,6 +82,13 @@ function uniqueCatalogItems(items: LoyaltyCatalogItem[]): LoyaltyCatalogItem[] {
     seen.add(key);
     return true;
   });
+}
+
+function requestFailureMessage(label: string, reason: unknown): string {
+  if (reason instanceof Error && reason.message.includes('session expired')) {
+    return reason.message;
+  }
+  return `${label} unavailable. Check the API at ${API_URL}.`;
 }
 
 export function HomeScreen({
@@ -167,7 +175,7 @@ export function HomeScreen({
       } else if (catResult.status === 'fulfilled') {
         errors.push(`Catalog ${catResult.value.status}`);
       } else {
-        errors.push('Catalog unreachable');
+        errors.push(requestFailureMessage('Catalog', catResult.reason));
       }
 
       if (meResult.status === 'fulfilled' && meResult.value.ok) {
@@ -181,7 +189,7 @@ export function HomeScreen({
       } else if (meResult.status === 'fulfilled') {
         errors.push(`Rewards ${meResult.value.status}`);
       } else {
-        errors.push('Rewards unavailable');
+        errors.push(requestFailureMessage('Rewards', meResult.reason));
       }
 
       setLoyaltyError(errors.length > 0 ? errors.join(', ') : null);
@@ -218,18 +226,8 @@ export function HomeScreen({
   }%`;
   const metadata = session?.user.user_metadata;
   const firstName = metadata?.first_name;
-  const lastName = metadata?.last_name;
   const greetingName =
     typeof firstName === 'string' && firstName.trim() ? firstName.trim() : 'Customer';
-  const profileInitials = [firstName, lastName]
-    .filter((part): part is string => typeof part === 'string' && Boolean(part.trim()))
-    .map((part) => part.trim().charAt(0).toUpperCase())
-    .join('')
-    .slice(0, 2) || 'CU';
-  const avatarUrl =
-    typeof metadata?.avatar_url === 'string' && metadata.avatar_url.trim()
-      ? metadata.avatar_url.trim()
-      : null;
   const heroHeight = insets.top + 290;
 
   // Refs + content-relative offsets for the app-guide spotlight measurements.
@@ -380,19 +378,10 @@ export function HomeScreen({
                 <Pressable ref={helpRef} onPress={openGuide} hitSlop={8}>
                   <Feather name="help-circle" size={24} color="#fff" />
                 </Pressable>
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel="Open profile"
-                  onPress={() => onNavigate('profile', { profileSection: 'personal' })}
-                  hitSlop={8}
-                  style={styles.homeProfileButton}
-                >
-                  {avatarUrl ? (
-                    <Image source={{ uri: avatarUrl }} style={styles.homeProfileImage} />
-                  ) : (
-                    <Text style={styles.homeProfileInitials}>{profileInitials}</Text>
-                  )}
-                </Pressable>
+                <AccountMenuButton
+                  variant="home"
+                  onProfile={() => onNavigate('profile', { profileSection: 'personal' })}
+                />
               </View>
             </View>
 
@@ -633,19 +622,6 @@ const styles = StyleSheet.create({
   homeHelloName: { color: '#fff' },
   homeSub: { fontFamily: fonts.medium, fontSize: 12, color: '#fff', marginTop: 3 },
   homeActions: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  homeProfileButton: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    borderWidth: 2,
-    borderColor: '#fff',
-    backgroundColor: 'rgba(255,255,255,0.18)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    overflow: 'hidden',
-  },
-  homeProfileImage: { width: '100%', height: '100%' },
-  homeProfileInitials: { fontFamily: fonts.bold, fontSize: 12, color: '#fff' },
   rewardTapArea: { zIndex: 4, width: '58%', marginTop: 27 },
   heroCopy: { width: '100%' },
   heroValueRow: { flexDirection: 'row', alignItems: 'baseline', gap: 8 },

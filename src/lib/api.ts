@@ -43,19 +43,6 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
 }
 
 /**
- * Like apiFetch but does NOT require a session — used for public endpoints
- * such as POST /auth/register where the caller has no token yet.
- */
-export async function apiPublicFetch(path: string, init: RequestInit = {}): Promise<Response> {
-  const headers = new Headers(init.headers);
-  const isMultipart = typeof FormData !== 'undefined' && init.body instanceof FormData;
-  if (init.body && !isMultipart && !headers.has('Content-Type')) {
-    headers.set('Content-Type', 'application/json');
-  }
-  return fetch(`${API_URL}/api${path}`, { ...init, headers });
-}
-
-/**
  * NestJS reports errors as { message: string | string[] } (validation errors
  * arrive as an array); older-style handlers used { error }. Normalize both.
  */

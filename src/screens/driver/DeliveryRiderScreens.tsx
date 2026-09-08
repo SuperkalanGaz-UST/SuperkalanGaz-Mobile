@@ -56,9 +56,21 @@ function AssignmentDetails({ assignment }: { assignment: DeliveryAssignment | De
     <View style={styles.detailsCard}>
       <DetailRow icon="hash" label="Service Request" value={assignment.srCode} />
       <DetailRow icon="user" label="Customer" value={assignment.customerName} />
-      <DetailRow icon="map-pin" label="Delivery address" value={assignment.deliveryAddress} />
+      <DetailRow icon="map-pin" label="Customer address" value={assignment.deliveryAddress} />
       <DetailRow icon="box" label="Order" value={`${assignment.quantity} × ${assignment.cylinderSize}`} />
       <DetailRow icon="truck" label="Assigned vehicle" value={assignment.vehicleLabel} />
+    </View>
+  );
+}
+
+function OfferDetails({ assignment }: { assignment: DeliveryOffer['assignment'] }) {
+  return (
+    <View style={styles.offerDetailsCard}>
+      <DetailRow icon="hash" label="Service Request" value={assignment.srCode} />
+      <DetailRow icon="user" label="Customer" value={assignment.customerName} />
+      <DetailRow icon="map-pin" label="Customer address" value={assignment.deliveryAddress} />
+      <DetailRow icon="box" label="Order" value={`${assignment.quantity} × ${assignment.cylinderSize}`} />
+      <DetailRow icon="clock" label="Requested" value={dateTime(assignment.requestedAt)} />
     </View>
   );
 }
@@ -78,25 +90,23 @@ function OfferSheet({
 }) {
   const insets = useSafeAreaInsets();
   return (
-    <Modal visible={Boolean(offer)} transparent animationType="slide" onRequestClose={() => undefined}>
+    <Modal visible={Boolean(offer)} transparent animationType="fade" onRequestClose={() => undefined}>
       <View style={styles.modalRoot}>
         <View style={[styles.offerSheet, { paddingBottom: insets.bottom + 20 }]}>
-          <View style={styles.sheetHandle} />
-          <View style={styles.offerHeadingRow}>
-            <View style={styles.offerIcon}>
-              <Feather name="bell" size={22} color={colors.primary} />
-            </View>
-            <View style={styles.offerHeadingCopy}>
-              <Text style={styles.offerEyebrow}>Assigned by Branch Manager</Text>
-              <Text style={styles.offerTitle}>New delivery offer</Text>
-            </View>
+          <View style={styles.offerIcon}>
+            <Feather name="package" size={28} color={colors.primary} />
+          </View>
+          <View style={styles.offerHeadingCopy}>
+            <Text style={styles.offerEyebrow}>New delivery offer</Text>
+            <Text style={styles.offerTitle}>You have a new delivery request</Text>
+            <Text style={styles.offerSubtitle}>Your Branch Manager sent you a delivery offer.</Text>
           </View>
           {offer ? (
             <>
-              <AssignmentDetails assignment={offer.assignment} />
+              <OfferDetails assignment={offer.assignment} />
               <View style={styles.expiryRow}>
                 <Feather name="clock" size={15} color={colors.warning} />
-                <Text style={styles.expiryText}>Respond before {dateTime(offer.expiresAt)}</Text>
+                <Text style={styles.expiryText}>Respond before this offer expires</Text>
               </View>
             </>
           ) : null}
@@ -106,10 +116,10 @@ function OfferSheet({
               <Text style={styles.secondaryButtonText}>Decline</Text>
             </Pressable>
             <Pressable disabled={busy} onPress={onAccept} style={({ pressed }) => [styles.acceptButton, pressed && styles.pressed, busy && styles.disabled]}>
-              <Text style={styles.acceptButtonText}>{busy ? 'Responding…' : 'Accept delivery'}</Text>
+              <Text style={styles.acceptButtonText}>{busy ? 'Responding…' : 'Accept offer'}</Text>
             </Pressable>
           </View>
-          <Text style={styles.sheetFinePrint}>Acceptance is confirmed by the server before the Service Request is dispatched.</Text>
+          <Text style={styles.sheetFinePrint}>Accepting confirms and dispatches this Service Request.</Text>
         </View>
       </View>
     </Modal>
@@ -379,19 +389,19 @@ const styles = StyleSheet.create({
   errorBanner: { flexDirection: 'row', alignItems: 'flex-start', gap: 9, borderRadius: 12, padding: 12, backgroundColor: '#FDECEA' },
   errorText: { flex: 1, fontFamily: fonts.regular, fontSize: 11, lineHeight: 17, color: colors.danger },
   detailsCard: { gap: 1, borderRadius: 18, paddingHorizontal: 15, backgroundColor: colors.surface, overflow: 'hidden' },
+  offerDetailsCard: { gap: 1, borderRadius: 18, paddingHorizontal: 15, backgroundColor: '#F5FAFE', borderWidth: 1, borderColor: '#D4EAF7', overflow: 'hidden' },
   detailRow: { flexDirection: 'row', alignItems: 'center', gap: 11, minHeight: 62, paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
   detailIcon: { width: 34, height: 34, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.primaryTint },
   detailCopy: { flex: 1 },
   detailLabel: { fontFamily: fonts.regular, fontSize: 9, color: colors.textMuted },
   detailValue: { fontFamily: fonts.medium, fontSize: 12, lineHeight: 18, color: colors.text, marginTop: 2 },
-  modalRoot: { flex: 1, justifyContent: 'flex-end', backgroundColor: colors.promoScrim },
-  offerSheet: { paddingHorizontal: 20, paddingTop: 11, gap: 15, backgroundColor: colors.surface, borderTopLeftRadius: 26, borderTopRightRadius: 26, maxHeight: '92%' },
-  sheetHandle: { width: 45, height: 5, alignSelf: 'center', borderRadius: 3, backgroundColor: colors.border },
-  offerHeadingRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  offerIcon: { width: 47, height: 47, borderRadius: 16, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.primaryTint },
-  offerHeadingCopy: { flex: 1 },
-  offerEyebrow: { fontFamily: fonts.medium, fontSize: 9, textTransform: 'uppercase', letterSpacing: 0.6, color: colors.primary },
-  offerTitle: { fontFamily: fonts.bold, fontSize: 20, color: colors.darkNavy, marginTop: 2 },
+  modalRoot: { flex: 1, justifyContent: 'center', paddingHorizontal: 18, backgroundColor: colors.promoScrim },
+  offerSheet: { width: '100%', maxHeight: '92%', alignSelf: 'center', paddingHorizontal: 18, paddingTop: 24, gap: 15, backgroundColor: colors.surface, borderRadius: 26, ...cardShadow },
+  offerIcon: { width: 68, height: 68, alignSelf: 'center', borderRadius: 34, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.primaryTint },
+  offerHeadingCopy: { alignItems: 'center', paddingHorizontal: 6 },
+  offerEyebrow: { fontFamily: fonts.semibold, fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.8, color: colors.primary },
+  offerTitle: { fontFamily: fonts.bold, fontSize: 20, lineHeight: 26, color: colors.darkNavy, marginTop: 5, textAlign: 'center' },
+  offerSubtitle: { fontFamily: fonts.regular, fontSize: 12, lineHeight: 19, color: colors.textMuted, marginTop: 4, textAlign: 'center' },
   expiryRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7 },
   expiryText: { fontFamily: fonts.medium, fontSize: 10, color: colors.warning },
   offerActions: { flexDirection: 'row', gap: 10 },
@@ -399,7 +409,7 @@ const styles = StyleSheet.create({
   secondaryButtonText: { fontFamily: fonts.semibold, fontSize: 12, color: colors.primary },
   acceptButton: { flex: 1.5, height: 50, alignItems: 'center', justifyContent: 'center', borderRadius: 12, backgroundColor: colors.primary },
   acceptButtonText: { fontFamily: fonts.semibold, fontSize: 12, color: colors.surface },
-  sheetFinePrint: { fontFamily: fonts.regular, fontSize: 9, lineHeight: 14, color: colors.textMuted, textAlign: 'center' },
+  sheetFinePrint: { fontFamily: fonts.regular, fontSize: 10, lineHeight: 15, color: colors.textMuted, textAlign: 'center' },
   pressed: { opacity: 0.75 },
   disabled: { opacity: 0.55 },
   emptyState: { alignItems: 'center', gap: 11, marginTop: 65, borderRadius: 20, padding: 28, backgroundColor: colors.surface },

@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { Session } from '@supabase/supabase-js';
-import { apiErrorMessage, apiFetch, apiPublicFetch } from '@/lib/api';
+import { apiErrorMessage, apiFetch } from '@/lib/api';
 import { normalizePhMobile } from '@/lib/phMobile';
 import { supabase } from '@/lib/supabase';
 
@@ -23,20 +23,6 @@ import { supabase } from '@/lib/supabase';
  */
 export type AccountType = 'household' | 'commercial';
 export type MobileRole = 'customer' | 'driver' | 'unsupported' | null;
-
-/** Details collected by the sign-up form (Figma "Create a … Account"). */
-export interface SignUpInput {
-  /** Which identifier the customer registered with. */
-  method: 'email' | 'phone';
-  /** Email address, or canonical E.164 phone (`+639XXXXXXXXX`) when method is phone. */
-  identifier: string;
-  password: string;
-  firstName: string;
-  lastName: string;
-  /** Home address (Household) or business address (Commercial). */
-  address: string;
-  accountType: AccountType;
-}
 
 export interface ProfileUpdateInput {
   firstName: string;
@@ -72,30 +58,6 @@ function isAcceptedDriverAwaitingMobileVerification(session: Session): boolean {
     metadata.status === 'Pending' &&
     typeof metadata.delivery_rider_invitation_accepted_at === 'string'
   );
-}
-
-async function requestSignUpOtpResend(
-  method: SignUpInput['method'],
-  identifier: string,
-): Promise<{ error: string | null }> {
-  try {
-    const response = await apiPublicFetch('/auth/resend-signup-code', {
-      method: 'POST',
-      body: JSON.stringify({ method, identifier }),
-    });
-    const data: unknown = await response.json().catch(() => null);
-    return {
-      error: response.ok
-        ? null
-        : apiErrorMessage(data, 'Could not resend the verification code.'),
-    };
-  } catch (err) {
-    return {
-      error: err instanceof Error
-        ? err.message
-        : 'Could not resend the verification code.',
-    };
-  }
 }
 
 /**
@@ -142,22 +104,6 @@ interface AuthContextValue {
   signIn: (identifier: string, password: string) => Promise<{ error: string | null }>;
   /** Refresh protected Auth claims after app-based Delivery Rider mobile verification. */
   refreshSession: () => Promise<{ error: string | null }>;
-  /**
-   * Register a new customer and request the signup code from Supabase Auth.
-   * `needsConfirmation` is true when the caller must show the OTP screen.
-   */
-  signUp: (input: SignUpInput) => Promise<{ error: string | null; needsConfirmation: boolean }>;
-  /** Confirm the email or SMS code that Supabase sent for a pending signup. */
-  verifySignUpOtp: (
-    method: SignUpInput['method'],
-    identifier: string,
-    token: string,
-  ) => Promise<{ error: string | null }>;
-  /** Ask Supabase to send a fresh signup code through the configured provider. */
-  resendSignUpOtp: (
-    method: SignUpInput['method'],
-    identifier: string,
-  ) => Promise<{ error: string | null }>;
   /** Send the non-enumerating recovery email managed by Supabase Auth. */
   requestPasswordReset: (email: string) => Promise<{ error: string | null }>;
   /** Exchange the emailed recovery OTP for a short-lived recovery session. */
@@ -298,8 +244,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setAccountType(null);
         return { error: 'This customer account has no loyalty track.' };
       }
-      // Signup recovery still knows which track the user selected. Normal
-      // sign-in passes null and relies entirely on the protected claim.
+      // Normal sign-in relies entirely on the protected account-type claim.
       if (chosenType && serverType !== chosenType) {
         await supabase.auth.signOut();
         setSession(null);
@@ -337,93 +282,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setSession(data.session);
         return { error: null };
       },
-      signUp: async (input) => {
-        setAccountType(input.accountType);
-
-        // Keep signup behind the API so it can start OTP delivery and attach
-        // service-role-only app_metadata claims. The mobile client can write
-        // user_metadata, but it must never control authorization claims.
-        try {
-          const res = await apiPublicFetch('/auth/register', {
-            method: 'POST',
-            body: JSON.stringify({
-              method: input.method,
-              identifier: input.identifier,
-              password: input.password,
-              firstName: input.firstName,
-              lastName: input.lastName,
-              address: input.address,
-              accountType: input.accountType,
-            }),
-          });
-          const data = await res.json();
-          if (!res.ok) {
-            const registrationError = apiErrorMessage(data, 'Registration failed');
-            if (/already (?:been )?registered/i.test(registrationError)) {
-              const credentials =
-                input.method === 'email'
-                  ? { email: input.identifier, password: input.password }
-                  : { phone: input.identifier, password: input.password };
-              const existingSignIn = await runSignIn(credentials, input.accountType);
-              if (!existingSignIn.error) {
-                return { error: null, needsConfirmation: false };
-              }
-
-              // A previous attempt may have created an unverified identity.
-              // With the correct password Supabase identifies that state as
-              // "not confirmed"; resend and resume OTP instead of dead-ending.
-              if (/not confirmed/i.test(existingSignIn.error)) {
-                const resent = await requestSignUpOtpResend(input.method, input.identifier);
-                if (!resent.error) {
-                  await AsyncStorage.setItem(ACCOUNT_TYPE_KEY, input.accountType);
-                  return { error: null, needsConfirmation: true };
-                }
-                return { error: resent.error, needsConfirmation: false };
-              }
-            }
-            return { error: registrationError, needsConfirmation: false };
-          }
-          await AsyncStorage.setItem(ACCOUNT_TYPE_KEY, input.accountType);
-          const needsConfirmation = data.needsConfirmation === true;
-          if (needsConfirmation) return { error: null, needsConfirmation: true };
-
-          // Projects with confirmation disabled return an immediately usable
-          // account, but the server cannot install its session in this client.
-          // Sign in once here so registration never leaves the customer stuck.
-          const credentials =
-            input.method === 'email'
-              ? { email: input.identifier, password: input.password }
-              : { phone: input.identifier, password: input.password };
-          const signedIn = await runSignIn(credentials, input.accountType);
-          return { error: signedIn.error, needsConfirmation: false };
-        } catch (err) {
-          return {
-            error: err instanceof Error ? err.message : 'Registration failed',
-            needsConfirmation: false,
-          };
-        }
-      },
-      verifySignUpOtp: async (method, identifier, token) => {
-        const { data, error } =
-          method === 'email'
-            ? await supabase.auth.verifyOtp({
-                email: identifier,
-                token,
-                type: 'email',
-              })
-            : await supabase.auth.verifyOtp({
-                phone: identifier,
-                token,
-                type: 'sms',
-              });
-        if (error) return { error: error.message };
-        const verifiedSession = data.session ?? (await supabase.auth.getSession()).data.session;
-        if (!verifiedSession) return { error: 'No signed-in customer session was created' };
-        const prepared = await ensureCustomerSession(verifiedSession);
-        if (!prepared.error) setSession(prepared.session);
-        return { error: prepared.error };
-      },
-      resendSignUpOtp: requestSignUpOtpResend,
       requestPasswordReset: async (email) => {
         const { error } = await supabase.auth.resetPasswordForEmail(email.trim().toLowerCase());
         return {
@@ -512,9 +370,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return { error: error?.message ?? null };
       },
       signOut: async () => {
-        await supabase.auth.signOut();
-        await AsyncStorage.removeItem(ACCOUNT_TYPE_KEY);
+        // Logout must clear the local session even if the network is down or
+        // Supabase cannot revoke the remote session. The app must never leave
+        // the user stranded in a protected screen because sign-out failed remotely.
+        try {
+          await supabase.auth.signOut({ scope: 'local' });
+        } catch {
+          // Local cleanup below is the important part of the mobile logout flow.
+        }
+        passwordRecoveryRef.current = false;
+        setSession(null);
         setAccountType(null);
+        try {
+          await AsyncStorage.multiRemove([ACCOUNT_TYPE_KEY, PASSWORD_RECOVERY_KEY]);
+        } catch {
+          // A storage cleanup failure must not prevent the auth state from closing.
+        }
       },
     };
   }, [session, accountType, initializing]);

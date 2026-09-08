@@ -11,7 +11,6 @@ import { Feather } from '@expo/vector-icons';
 import { colors } from '@/theme/colors';
 import { fonts } from '@/theme/fonts';
 import { cardShadow, radii } from '@/theme/metrics';
-import type { InputMode } from '@/navigation/types';
 
 /* ─────────────────────────────────────────────
    Buttons
@@ -181,56 +180,6 @@ export function PhoneField({
    Segmented controls
 ───────────────────────────────────────────── */
 
-export function EmailPhoneToggle({
-  value,
-  onChange,
-  height = 54,
-}: {
-  value: InputMode;
-  onChange: (v: InputMode) => void;
-  height?: number;
-}) {
-  return (
-    <View style={[styles.segTrack, { height }]}>
-      <View style={[styles.segThumb, { left: value === 'email' ? 0 : '50%' }]} />
-      {(['email', 'phone'] as const).map((m) => (
-        <Pressable key={m} style={styles.segItem} onPress={() => onChange(m)}>
-          <Text style={[styles.segText, { color: value === m ? '#fff' : colors.primary }]}>
-            {m === 'email' ? 'Email' : 'Phone'}
-          </Text>
-        </Pressable>
-      ))}
-    </View>
-  );
-}
-
-export function AccountTypeTabs({
-  value,
-  onChange,
-}: {
-  value: 'household' | 'commercial';
-  onChange: (v: 'household' | 'commercial') => void;
-}) {
-  return (
-    <View>
-      <View style={{ flexDirection: 'row' }}>
-        {(['household', 'commercial'] as const).map((t) => (
-          <Pressable key={t} style={styles.tabItem} onPress={() => onChange(t)}>
-            <Text
-              style={[styles.tabText, { color: value === t ? colors.primary : colors.muted }]}
-            >
-              {t === 'household' ? 'Household' : 'Commercial'}
-            </Text>
-          </Pressable>
-        ))}
-      </View>
-      <View style={styles.tabTrack}>
-        <View style={[styles.tabUnderline, { left: value === 'household' ? '0%' : '50%' }]} />
-      </View>
-    </View>
-  );
-}
-
 /* ─────────────────────────────────────────────
    OTP 6-box input
 ───────────────────────────────────────────── */
@@ -331,36 +280,6 @@ const styles = StyleSheet.create({
   },
   phonePrefix: { fontFamily: fonts.regular, fontSize: 14, color: colors.label, marginRight: 6 },
   phoneInput: { flex: 1, fontFamily: fonts.regular, fontSize: 14, color: colors.label, padding: 0 },
-
-  segTrack: {
-    position: 'relative',
-    backgroundColor: colors.segmentBg,
-    borderRadius: radii.card,
-    flexDirection: 'row',
-    overflow: 'hidden',
-    ...cardShadow,
-  },
-  segThumb: {
-    position: 'absolute',
-    top: 0,
-    height: '100%',
-    width: '50%',
-    backgroundColor: colors.primary,
-    borderRadius: radii.card,
-  },
-  segItem: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  segText: { fontFamily: fonts.bold, fontSize: 16 },
-
-  tabItem: { flex: 1, alignItems: 'center', paddingBottom: 12 },
-  tabText: { fontFamily: fonts.semibold, fontSize: 16 },
-  tabTrack: { height: 1, backgroundColor: colors.divider },
-  tabUnderline: {
-    position: 'absolute',
-    top: 0,
-    height: 2,
-    width: '50%',
-    backgroundColor: colors.primary,
-  },
 
   otpRow: { flexDirection: 'row', gap: 8, justifyContent: 'center' },
   otpBox: {
