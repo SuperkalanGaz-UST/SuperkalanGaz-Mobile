@@ -1,19 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Image,
-  Keyboard,
-  KeyboardAvoidingView,
-  Modal,
-  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
-  TouchableWithoutFeedback,
   View,
 } from 'react-native';
-import { Feather, Ionicons } from '@expo/vector-icons';
+import { Feather } from '@expo/vector-icons';
 import * as WebBrowser from 'expo-web-browser';
 import { colors } from '@/theme/colors';
 import { fonts } from '@/theme/fonts';
@@ -22,6 +16,8 @@ import { cylinderFor, images } from '@/lib/assets';
 import { AppHeader } from '@/components/ui/AppHeader';
 import { BottomNav } from '@/components/ui/BottomNav';
 import { apiErrorMessage, apiFetch } from '@/lib/api';
+import { useAuth } from '@/contexts/AuthContext';
+import { loadReviewedOrderIds, OrderFeedbackModal } from './OrderFeedbackModal';
 import type { MainNavigateOptions, MainScreen } from '@/navigation/types';
 
 /**
@@ -31,12 +27,12 @@ import type { MainNavigateOptions, MainScreen } from '@/navigation/types';
  * SCAFFOLD: order data is Figma mock. Wire to the SRD endpoints; surface delivery
  * status MILESTONES only — never live GPS (AGENTS.md §7).
  */
-type Sub = 'list' | 'details' | 'feedback-rate' | 'feedback-comment';
+type Sub = 'list' | 'details';
 
 type OrderRow = {
   id: string;
   branch_id: string;
-  status: 'Pending' | 'Dispatched' | 'En Route' | 'Delivered' | 'Cancelled' | 'Under Review';
+  status: 'Pending' | 'Dispatched' | 'En Route' | 'Delivered' | 'Completed' | 'Cancelled' | 'Under Review';
   customer_name: string;
   delivery_address: string;
   cylinder_size: string;
@@ -59,37 +55,28 @@ type PaymentResponse = {
 
 WebBrowser.maybeCompleteAuthSession();
 
-function Stars({ value, onRate }: { value: number; onRate: (n: number) => void }) {
-  return (
-    <View style={styles.starsRow}>
-      {[1, 2, 3, 4, 5].map((n) => (
-        <Pressable key={n} onPress={() => onRate(n)} hitSlop={4}>
-          <Ionicons name={n <= value ? 'star' : 'star-outline'} size={48} color={n <= value ? colors.primary : colors.cardBorder} />
-        </Pressable>
-      ))}
-    </View>
-  );
-}
-
 export function OrdersScreen({ onNavigate }: { onNavigate: (screen: MainScreen, opts?: MainNavigateOptions) => void }) {
+  const { session } = useAuth();
+  const customerId = session?.user.id ?? null;
   const [tab, setTab] = useState<'active' | 'past'>('active');
   const [sub, setSub] = useState<Sub>('list');
-  const [rating, setRating] = useState(0);
-  const [comment, setComment] = useState('');
   const [orders, setOrders] = useState<OrderRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [paymentMessage, setPaymentMessage] = useState<string | null>(null);
   const [retryingOrderId, setRetryingOrderId] = useState<string | null>(null);
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
-  /** The order currently being rated. Tracked separately so the submit call
-   *  knows which service_request_id to send even if sub-screen changes. */
   const [ratingOrderId, setRatingOrderId] = useState<string | null>(null);
+  const [reviewedOrderIds, setReviewedOrderIds] = useState<Set<string>>(new Set());
 
-  // Feedback submission states
-  const [submitting, setSubmitting] = useState(false);
-  const [submitError, setSubmitError] = useState<string | null>(null);
-  const [submitSuccess, setSubmitSuccess] = useState(false);
+  useEffect(() => {
+    if (!customerId) return;
+    let active = true;
+    void loadReviewedOrderIds(customerId).then((ids) => {
+      if (active) setReviewedOrderIds(ids);
+    });
+    return () => { active = false; };
+  }, [customerId]);
 
   const loadOrders = useCallback(async () => {
     setLoading(true);
@@ -112,11 +99,11 @@ export function OrdersScreen({ onNavigate }: { onNavigate: (screen: MainScreen, 
   }, [loadOrders]);
 
   const activeOrders = useMemo(
-    () => orders.filter((order) => order.status !== 'Delivered' && order.status !== 'Cancelled'),
+    () => orders.filter((order) => order.status !== 'Delivered' && order.status !== 'Completed' && order.status !== 'Cancelled'),
     [orders],
   );
   const pastOrders = useMemo(
-    () => orders.filter((order) => order.status === 'Delivered'),
+    () => orders.filter((order) => order.status === 'Delivered' || order.status === 'Completed'),
     [orders],
   );
 
@@ -125,62 +112,15 @@ export function OrdersScreen({ onNavigate }: { onNavigate: (screen: MainScreen, 
     : new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP', maximumFractionDigits: 0 }).format(value));
   const formatDate = (iso: string) => new Intl.DateTimeFormat('en-PH', { month: 'long', day: 'numeric', year: 'numeric' }).format(new Date(iso));
 
-  const showFeedback = sub === 'feedback-rate' || sub === 'feedback-comment';
   const detailOrder = orders.find((order) => order.id === selectedOrderId) ?? orders[0];
 
-  /** Open the feedback modal for a specific order. */
   const openFeedback = (orderId: string) => {
+    if (reviewedOrderIds.has(orderId)) return;
     setRatingOrderId(orderId);
-    setRating(0);
-    setComment('');
-    setSubmitError(null);
-    setSubmitSuccess(false);
-    setSub('feedback-rate');
   };
 
-  /** Close feedback modal and reset all feedback state. */
   const closeFeedback = () => {
-    Keyboard.dismiss();
-    setSub('list');
     setRatingOrderId(null);
-    setRating(0);
-    setComment('');
-    setSubmitError(null);
-    setSubmitSuccess(false);
-  };
-
-  /**
-   * POST /csat/ratings — save star rating + optional comment to the backend.
-   * The branch_id is derived server-side from the Service Request so the
-   * customer cannot spoof it (AGENTS.md §5).
-   */
-  const handleSubmitFeedback = async () => {
-    if (rating === 0 || !ratingOrderId || submitting) return;
-    Keyboard.dismiss();
-    setSubmitting(true);
-    setSubmitError(null);
-    try {
-      const res = await apiFetch('/csat/ratings', {
-        method: 'POST',
-        body: JSON.stringify({
-          serviceRequestId: ratingOrderId,
-          stars: rating,
-          comment: comment.trim() || undefined,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(apiErrorMessage(data, 'Failed to submit feedback'));
-      setSubmitSuccess(true);
-      // Brief pause so the user sees the success state, then close
-      setTimeout(() => {
-        closeFeedback();
-        setTab('past');
-      }, 1500);
-    } catch (err) {
-      setSubmitError(err instanceof Error ? err.message : 'Failed to submit feedback');
-    } finally {
-      setSubmitting(false);
-    }
   };
 
   const updatePayment = (orderId: string, payment: PaymentResponse) => {
@@ -281,8 +221,8 @@ export function OrdersScreen({ onNavigate }: { onNavigate: (screen: MainScreen, 
           <Text style={styles.footerDate}>Order Date: {formatDate(o.requested_at)}</Text>
         </View>
         {past && (
-          <Pressable style={styles.rateBtn} onPress={() => openFeedback(o.id)}>
-            <Text style={styles.rateBtnText}>Rate this order</Text>
+          <Pressable style={styles.rateBtn} disabled={reviewedOrderIds.has(o.id)} onPress={() => openFeedback(o.id)}>
+            <Text style={styles.rateBtnText}>{reviewedOrderIds.has(o.id) ? 'Feedback submitted' : 'Rate this order'}</Text>
           </Pressable>
         )}
       </View>
@@ -410,115 +350,17 @@ export function OrdersScreen({ onNavigate }: { onNavigate: (screen: MainScreen, 
       <ScrollView style={styles.sheet} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 130 }}>
         {sub === 'list' && renderList()}
         {sub === 'details' && renderDetails()}
-        {showFeedback && (tab === 'past' ? renderList() : renderDetails())}
       </ScrollView>
 
-      {/* Feedback sheet
-          KeyboardAvoidingView ensures the Submit button stays above the keyboard.
-          The absoluteFill Pressable (backdrop) closes the modal when tapped. The
-          inner ScrollView with keyboardShouldPersistTaps="handled" lets the user
-          tap buttons without first needing to dismiss the keyboard. */}
-      <Modal visible={showFeedback} transparent animationType="slide" onRequestClose={closeFeedback}>
-        {/* Root container fills the whole screen */}
-        <View style={{ flex: 1, justifyContent: 'flex-end' }}>
-          {/* Backdrop sits behind the sheet — absoluteFill so it doesn't affect layout */}
-          <Pressable style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.3)' }]} onPress={closeFeedback} />
-
-          <KeyboardAvoidingView
-            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          >
-            <View style={styles.feedbackSheet}>
-              <View style={styles.progressRow}>
-                {sub === 'feedback-comment' ? (
-                  <>
-                    <View style={styles.dot} />
-                    <View style={styles.dash} />
-                  </>
-                ) : (
-                  <>
-                    <View style={styles.dash} />
-                    <View style={styles.dot} />
-                  </>
-                )}
-              </View>
-
-              {/* ScrollView inside the sheet so the Submit button scrolls into view
-                  when the keyboard is open on smaller devices. keyboardShouldPersistTaps
-                  ensures tapping the Submit button works without first needing to dismiss
-                  the keyboard. */}
-              <ScrollView
-                keyboardShouldPersistTaps="handled"
-                showsVerticalScrollIndicator={false}
-              >
-                {sub === 'feedback-rate' && (
-                  <View style={styles.fbAvatarWrap}>
-                    <View style={styles.fbAvatar}>
-                      <Feather name="user" size={42} color="#fff" />
-                    </View>
-                  </View>
-                )}
-                <Text style={styles.fbTitle}>How was your experience?</Text>
-                <Text style={styles.fbSub}>
-                  {sub === 'feedback-comment'
-                    ? 'Help us improve your delivery experience by rating our branch.'
-                    : 'Help us improve your delivery experience by rating your rider.'}
-                </Text>
-                <Stars
-                  value={rating}
-                  onRate={(n) => {
-                    setRating(n);
-                    // Auto-advance to the comment step after a brief pause so
-                    // the selected star is visible before the sheet changes.
-                    if (sub === 'feedback-rate') {
-                      setTimeout(() => setSub('feedback-comment'), 250);
-                    }
-                  }}
-                />
-
-                {sub === 'feedback-comment' && (
-                  <TextInput
-                    style={styles.commentBox}
-                    placeholder="Write your thoughts..."
-                    placeholderTextColor={colors.muted}
-                    multiline
-                    value={comment}
-                    onChangeText={setComment}
-                    returnKeyType="done"
-                    blurOnSubmit
-                    onSubmitEditing={Keyboard.dismiss}
-                  />
-                )}
-
-                {submitError ? (
-                  <Text style={styles.submitError}>{submitError}</Text>
-                ) : null}
-
-                {submitSuccess ? (
-                  <Text style={styles.submitSuccess}>✓ Feedback submitted! Thank you.</Text>
-                ) : null}
-
-                <Pressable
-                  style={[
-                    styles.fbBtn,
-                    {
-                      backgroundColor:
-                        rating > 0 && !submitting && !submitSuccess
-                          ? colors.primary
-                          : colors.disabledBlue,
-                    },
-                  ]}
-                  disabled={rating === 0 || submitting || submitSuccess}
-                  onPress={() => void handleSubmitFeedback()}
-                >
-                  <Text style={styles.fbBtnText}>
-                    {submitting ? 'Submitting…' : submitSuccess ? 'Submitted!' : 'Submit Feedback'}
-                  </Text>
-                </Pressable>
-              </ScrollView>
-            </View>
-          </KeyboardAvoidingView>
-        </View>
-      </Modal>
+      <OrderFeedbackModal
+        orderId={ratingOrderId}
+        customerId={customerId}
+        onClose={closeFeedback}
+        onReviewed={(orderId) => {
+          setReviewedOrderIds((current) => new Set([...current, orderId]));
+          setTab('past');
+        }}
+      />
 
       <BottomNav active="orders" onNavigate={onNavigate} />
     </View>
@@ -575,18 +417,5 @@ const styles = StyleSheet.create({
   productPrice: { fontFamily: fonts.bold, fontSize: 22, color: colors.primary, marginTop: 4 },
 
   sheetBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.3)' }, // kept for reference; backdrop is now absoluteFill
-  feedbackSheet: { backgroundColor: '#fff', borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingHorizontal: 20, paddingTop: 20, paddingBottom: 32 },
-  progressRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 16 },
-  dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.muted },
-  dash: { width: 40, height: 8, borderRadius: 4, backgroundColor: colors.muted },
-  fbAvatarWrap: { alignItems: 'center', marginBottom: 12 },
-  fbAvatar: { width: 80, height: 80, borderRadius: 40, backgroundColor: colors.avatarGray, alignItems: 'center', justifyContent: 'center' },
-  fbTitle: { fontFamily: fonts.semibold, fontSize: 20, color: colors.heading, marginBottom: 4 },
-  fbSub: { fontFamily: fonts.regular, fontSize: 15, color: colors.grayText, marginBottom: 16 },
-  starsRow: { flexDirection: 'row', gap: 12, marginBottom: 16 },
-  commentBox: { borderWidth: 1, borderColor: colors.cardBorder, borderRadius: radii.chip, padding: 12, height: 100, fontFamily: fonts.regular, fontSize: 15, color: colors.label, textAlignVertical: 'top', marginBottom: 12 },
-  submitError: { fontFamily: fonts.medium, fontSize: 13, color: '#CC1903', marginBottom: 10, textAlign: 'center' },
-  submitSuccess: { fontFamily: fonts.medium, fontSize: 13, color: '#16A34A', marginBottom: 10, textAlign: 'center' },
-  fbBtn: { height: 47, borderRadius: radii.card, alignItems: 'center', justifyContent: 'center', marginTop: 4 },
-  fbBtnText: { fontFamily: fonts.semibold, fontSize: 15, color: '#fff' },
+
 });

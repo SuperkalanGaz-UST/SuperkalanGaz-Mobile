@@ -23,6 +23,7 @@ export type MainTab = 'home' | 'rewards' | 'orders' | 'more';
 export type ProfileSection = 'personal' | 'preferences';
 
 export interface MainNavigateOptions {
+  orderId?: string;
   tab?: MainTab;
   showGuide?: boolean;
   profileSection?: ProfileSection;

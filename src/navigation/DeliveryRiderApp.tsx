@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import {
@@ -39,6 +39,7 @@ export function DeliveryRiderApp() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [busy, setBusy] = useState(false);
+  const submittingProof = useRef(false);
   const [error, setError] = useState('');
   const locationEnabled = dashboard?.deliveryRider.availability === 'Available'
     || dashboard?.deliveryRider.availability === 'On Delivery';
@@ -107,11 +108,14 @@ export function DeliveryRiderApp() {
         busy={busy}
         submitError={error}
         onBack={() => {
+          if (submittingProof.current) return;
           setError('');
           setRoute('tabs');
           setActiveTab('delivery');
         }}
         onSubmit={(photo: DeliveryProofPhoto) => {
+          if (submittingProof.current || busy) return;
+          submittingProof.current = true;
           const completing = assignment;
           setBusy(true);
           setError('');
@@ -124,7 +128,10 @@ export function DeliveryRiderApp() {
             .catch((submitError: unknown) => {
               setError(submitError instanceof Error ? submitError.message : 'Could not submit the delivery proof.');
             })
-            .finally(() => setBusy(false));
+            .finally(() => {
+              submittingProof.current = false;
+              setBusy(false);
+            });
         }}
       />
     );

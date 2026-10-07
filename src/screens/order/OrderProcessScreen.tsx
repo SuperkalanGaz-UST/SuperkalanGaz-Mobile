@@ -25,6 +25,9 @@ import {
   type SaveCustomerAddressInput,
 } from '@/lib/customerAddresses';
 import { CYLINDER_POINTS } from '@/lib/cylinderPoints';
+import { loadReviewedOrderIds, OrderFeedbackModal } from '@/screens/orders/OrderFeedbackModal';
+import { orderProgress } from '@/lib/orderProgress';
+import { OrderProgressTracker } from '@/components/orders/OrderProgressTracker';
 
 /**
  * Order flow (Figma "OrderProcess"): delivery address + branch → product select
@@ -39,7 +42,6 @@ type Step = 'location' | 'select' | 'schedule' | 'summary' | 'track';
 type ModalKind = 'none' | 'selectAddress' | 'editAddress' | 'confirmed' | 'sched' | 'payment';
 type Payment = 'paymongo' | 'cash';
 type PaymentStatus = 'Unpaid' | 'Pending' | 'Paid';
-type FeedbackStep = 'none' | 'rider' | 'store' | 'xfeedback';
 type DeliverySchedule = 'now' | 'later';
 type AddressSelectField = 'province' | 'city' | 'barangay';
 type AddressEntryMode = 'choice' | 'current' | 'map' | 'manual';
@@ -79,7 +81,7 @@ type BranchOption = {
 type OrderRow = {
   id: string;
   branch_id: string;
-  status: 'Pending' | 'Dispatched' | 'En Route' | 'Delivered' | 'Cancelled' | 'Under Review';
+  status: 'Pending' | 'Dispatched' | 'En Route' | 'Delivered' | 'Completed' | 'Cancelled' | 'Under Review';
   customer_name: string;
   customer_contact: string;
   delivery_address: string;
@@ -194,7 +196,6 @@ const DEFAULT_ADDRESS_CENTER: Coordinate = {
   latitude: 14.6507,
   longitude: 121.0489,
 };
-const STEP_LABELS = ['Order\nConfirmed', 'Preparing', 'Out for Delivery', 'Delivered'];
 const CALENDAR_WEEKDAYS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
 const CALENDAR_MONTHS = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -272,7 +273,11 @@ function savedAddressFromRow(row: CustomerAddressRow): SavedAddress {
   };
 }
 
-export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainScreen, opts?: { tab?: MainTab }) => void }) {
+export function OrderProcessScreen({ onNavigate, initialOrderId, onOrderPlaced }: {
+  onNavigate: (screen: MainScreen, opts?: { tab?: MainTab }) => void;
+  initialOrderId?: string;
+  onOrderPlaced: (orderId: string) => void;
+}) {
   const insets = useSafeAreaInsets();
   const { session } = useAuth();
   const { prices, loading: pricesLoading, error: pricesError, refresh: refreshPrices } = usePricing();
@@ -305,7 +310,7 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
     }),
     [prices],
   );
-  const [step, setStep] = useState<Step>('location');
+  const [step, setStep] = useState<Step>(initialOrderId ? 'track' : 'location');
   const [modal, setModal] = useState<ModalKind>('none');
   const [quantities, setQuantities] = useState<Record<string, number>>({});
   const [savedAddresses, setSavedAddresses] = useState<SavedAddress[]>(() => initialAddress ? [initialAddress] : []);
@@ -318,10 +323,8 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
   const [payment, setPayment] = useState<Payment>('cash');
   const [tempPayment, setTempPayment] = useState<Payment>('cash');
   const [delivered, setDelivered] = useState(false);
-  const [feedback, setFeedback] = useState<FeedbackStep>('none');
-  const [riderRating, setRiderRating] = useState(0);
-  const [storeRating, setStoreRating] = useState(0);
-  const [feedbackText, setFeedbackText] = useState('');
+  const [feedbackOrderId, setFeedbackOrderId] = useState<string | null>(null);
+  const [reviewedOrderId, setReviewedOrderId] = useState<string | null>(null);
   const [toast, setToast] = useState('');
   const [deliverySchedule, setDeliverySchedule] = useState<DeliverySchedule | null>(null);
   const [scheduledDate, setScheduledDate] = useState<Date | null>(null);
@@ -356,6 +359,16 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
   const [currentOrder, setCurrentOrder] = useState<OrderRow | null>(null);
   const [orderPlacedAt, setOrderPlacedAt] = useState<Date | null>(null);
   const [riderName, setRiderName] = useState<string | null>(null);
+  const closeTracking = () => onNavigate('home', { tab: 'home' });
+
+  useEffect(() => {
+    if (!session?.user.id || !currentOrder?.id) return;
+    let active = true;
+    void loadReviewedOrderIds(session.user.id).then((ids) => {
+      if (active) setReviewedOrderId(ids.has(currentOrder.id) ? currentOrder.id : null);
+    });
+    return () => { active = false; };
+  }, [session?.user.id, currentOrder?.id]);
 
   useEffect(() => {
     if (currentOrder?.rider_id) {
@@ -369,7 +382,9 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
   }, [currentOrder?.rider_id]);
 
   useEffect(() => {
-    if (step !== 'track' || !currentOrder) return;
+    const orderId = currentOrder?.id ?? initialOrderId;
+    if (step !== 'track' || !orderId) return;
+    let active = true;
     const poll = async () => {
       try {
         // Bust React Native's aggressive GET cache by appending a timestamp
@@ -382,8 +397,11 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
         });
         if (res.ok) {
           const data = await res.json();
-          const updated = data.serviceRequests?.find((r: OrderRow) => r.id === currentOrder.id);
-          if (updated) setCurrentOrder(updated);
+          const updated = data.serviceRequests?.find((r: OrderRow) => r.id === orderId);
+          if (updated && active) {
+            setCurrentOrder(updated);
+            setOrderPlacedAt(new Date(updated.requested_at));
+          }
         }
       } catch (e) {
         // ignore
@@ -392,8 +410,8 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
     // Fetch immediately on entering track, then poll every 2s
     void poll();
     const interval = setInterval(poll, 2000);
-    return () => clearInterval(interval);
-  }, [step, currentOrder?.id]);
+    return () => { active = false; clearInterval(interval); };
+  }, [step, currentOrder?.id, initialOrderId]);
 
   const loadBranchesForAddress = async (nextAddress: SavedAddress | null) => {
     try {
@@ -592,6 +610,8 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
       const order = data.serviceRequest as OrderRow;
       setCurrentOrder(order);
       setOrderPlacedAt(new Date(order.requested_at));
+      setStep('track');
+      onOrderPlaced(order.id);
       if (order.payment_method === 'PayMongo') {
         await launchPayMongoCheckout(order);
       } else {
@@ -1073,46 +1093,6 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
   };
 
   /* ── Stepper ── */
-  const stepper = (done: number) => (
-    <View style={styles.stepper}>
-      {STEP_LABELS.map((label, i) => {
-        const isDone = i < done;
-        const isActive = i === done;
-        const isLast = i === STEP_LABELS.length - 1;
-        const bg = isDone ? colors.greenBright : isActive ? '#fff' : colors.stepActiveBg;
-        const border = isDone ? colors.greenBright : isActive ? '#8db5f6' : colors.stepIdle;
-        return (
-          <View key={label} style={[styles.stepCol, isLast ? { flex: 0 } : { flex: 1 }]}>
-            {/* Row 1: circle + connecting line */}
-            <View style={styles.stepRow}>
-              <View style={[styles.stepNode, { backgroundColor: bg, borderColor: border }]}>
-                {isDone ? <Feather name="check" size={16} color="#fff" /> : <View style={[styles.stepDot, { backgroundColor: isActive ? colors.primary : colors.stepIdle }]} />}
-              </View>
-              {!isLast && <View style={[styles.stepLine, { backgroundColor: isDone ? colors.greenBright : colors.stepIdle }]} />}
-            </View>
-            {/* Row 2: label anchored under the circle only */}
-            <View style={styles.stepLabelRow}>
-              <View style={styles.stepLabelAnchor}>
-                <Text
-                  numberOfLines={i === 0 ? 2 : 1}
-                  style={[
-                    styles.stepLabel,
-                    { color: isActive ? '#143263' : '#8a8f99' },
-                    i === 0 && { width: 92 },
-                    i !== 0 && { width: 112 }
-                  ]}
-                >
-                  {label}
-                </Text>
-              </View>
-              {!isLast && <View style={styles.stepLabelSpacer} />}
-            </View>
-          </View>
-        );
-      })}
-    </View>
-  );
-
   const paymentLabel = payment === 'paymongo'
     ? 'Online payment — GCash, Maya, or QR Ph'
     : 'Cash on Delivery';
@@ -1552,15 +1532,18 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
   );
 
   const renderTrack = () => {
-    if (delivered || currentOrder?.status === 'Delivered') {
+    if (!currentOrder) return <ActivityIndicator color={colors.primary} />;
+    if (delivered || currentOrder?.status === 'Delivered' || currentOrder?.status === 'Completed') {
       return (
         <View style={{ paddingHorizontal: 24 }}>
-          <View style={{ paddingVertical: 20 }}>{stepper(4)}</View>
+          <View style={{ paddingVertical: 20 }}><OrderProgressTracker status={currentOrder.status} variant="status" /></View>
           <Text style={styles.trackDone}>Delivery Complete!</Text>
           {summaryRow('Order Number:', currentOrder?.id?.slice(0, 8).toUpperCase() ?? 'PENDING')}
           {summaryRow('Time of Delivery:', currentOrder?.delivered_at ? new Date(currentOrder.delivered_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) : 'Just now')}
           {summaryRow('Driver:', riderName || 'Assigned Driver')}
-          <Pressable style={[styles.cta, { marginTop: 12 }]} onPress={() => setFeedback('rider')}><Text style={styles.ctaText}>SUBMIT FEEDBACK</Text></Pressable>
+          <Pressable style={[styles.cta, { marginTop: 12 }]} disabled={!currentOrder || reviewedOrderId === currentOrder.id} onPress={() => currentOrder && setFeedbackOrderId(currentOrder.id)}>
+            <Text style={styles.ctaText}>{currentOrder && reviewedOrderId === currentOrder.id ? 'FEEDBACK SUBMITTED' : 'SUBMIT FEEDBACK'}</Text>
+          </Pressable>
         </View>
       );
     }
@@ -1596,15 +1579,7 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
       );
     }
 
-    // Pending → 1 (Order Confirmed immediately green, Preparing active)
-    // Dispatched/En Route → 3 (Out for Delivery checked, Delivered active)
-    // Backend dispatch is the customer-visible "out for delivery" milestone.
-    let stepIndex = 1;
-    if (currentOrder?.status === 'Dispatched' || currentOrder?.status === 'En Route') {
-      stepIndex = 3;
-    }
-
-    const isOutForDelivery = currentOrder?.status === 'Dispatched' || currentOrder?.status === 'En Route';
+    const isOutForDelivery = orderProgress(currentOrder.status).step === 1;
     const isPending = currentOrder?.status === 'Pending';
 
     // Build branch label: "Superkalan Gaz Amadeo, Cavite" — use name + city only
@@ -1632,7 +1607,7 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
         <Text style={styles.trackNotify}>
           {isOutForDelivery ? 'Your rider has been dispatched and is heading your way.' : "We'll notify you when your order is out for delivery."}
         </Text>
-        <View style={styles.stepperWrap}>{stepper(stepIndex)}</View>
+        <View style={styles.stepperWrap}><OrderProgressTracker status={currentOrder.status} variant="status" /></View>
         {isOutForDelivery && currentOrder?.rider_id ? (
           <View style={styles.riderRow}>
             <View style={styles.riderAvatar}><Feather name="user" size={16} color="#fff" /></View>
@@ -1657,27 +1632,16 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
     );
   };
 
-  /* ── Feedback ── */
-  const stars = (value: number, onRate: (n: number) => void, color = colors.starYellow) => (
-    <View style={styles.starsRow}>
-      {[1, 2, 3, 4, 5].map((n) => (
-        <Pressable key={n} onPress={() => onRate(n)} hitSlop={4}>
-          <Ionicons name={n <= value ? 'star' : 'star-outline'} size={52} color={n <= value ? color : colors.cardBorder} />
-        </Pressable>
-      ))}
-    </View>
-  );
-
   return (
     <View style={styles.flex}>
       <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
         <Pressable
           onPress={() => {
-            if (step === 'location') onNavigate('home', { tab: 'home' });
+            if (step === 'track' || currentOrder) closeTracking();
+            else if (step === 'location') onNavigate('home', { tab: 'home' });
             else if (step === 'select') setStep('location');
             else if (step === 'schedule') setStep('select');
             else if (step === 'summary') setStep('schedule');
-            else setStep('summary');
           }}
           hitSlop={8}
         >
@@ -2226,10 +2190,10 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
       </Modal>
 
       {/* Order Confirmed */}
-      <Modal visible={modal === 'confirmed'} transparent animationType="fade" onRequestClose={() => setModal('none')}>
+      <Modal visible={modal === 'confirmed'} transparent animationType="fade" onRequestClose={closeTracking}>
         <View style={styles.centerBackdrop}>
           <View style={styles.confirmDialog}>
-            <Pressable style={styles.confirmClose} onPress={() => setModal('none')} hitSlop={8}><Feather name="x" size={22} color={colors.grayText} /></Pressable>
+            <Pressable style={styles.confirmClose} onPress={closeTracking} hitSlop={8}><Feather name="x" size={22} color={colors.grayText} /></Pressable>
             <View style={styles.confirmCircle}><Feather name="check" size={56} color="#fff" /></View>
             <Text style={styles.confirmTitle}>Order Confirmed!</Text>
             <Text style={styles.confirmBody}>
@@ -2245,52 +2209,12 @@ export function OrderProcessScreen({ onNavigate }: { onNavigate: (screen: MainSc
         </View>
       </Modal>
 
-      {/* Feedback */}
-      <Modal visible={feedback !== 'none'} transparent animationType={feedback === 'xfeedback' ? 'fade' : 'slide'} onRequestClose={() => setFeedback('none')}>
-        {feedback === 'xfeedback' ? (
-          <View style={styles.centerBackdrop}>
-            <View style={styles.xfeedbackCard}>
-              <Image source={images.mascotSad} style={styles.xfeedbackMascot} resizeMode="contain" />
-              <Pressable style={styles.confirmClose} onPress={() => setFeedback('none')} hitSlop={8}><Feather name="x" size={22} color={colors.grayText} /></Pressable>
-              <Text style={styles.xfeedbackTitle}>Not in the mood?</Text>
-              <Text style={styles.xfeedbackBody}>
-                You can still rate our services and rider within 24 hours since your last order.{'\n\n'}If the time is reached, your reward points won't be added to your account.
-              </Text>
-            </View>
-          </View>
-        ) : (
-          <>
-            <View style={styles.sheetBackdrop} />
-            <View style={styles.feedbackSheet}>
-              <Pressable style={styles.confirmClose} onPress={() => setFeedback('xfeedback')} hitSlop={8}><Feather name="x" size={16} color={colors.gray} /></Pressable>
-              {feedback === 'rider' && (
-                <View style={styles.fbAvatarWrap}><View style={styles.fbAvatar}><Feather name="user" size={52} color="#fff" /></View></View>
-              )}
-              <Text style={styles.fbTitle}>How was your experience?</Text>
-              <Text style={styles.fbSub}>
-                {feedback === 'rider' ? 'Help us improve your delivery experience by rating your rider.' : 'Help us improve your delivery experience by rating our branch.'}
-              </Text>
-              {feedback === 'rider' ? stars(riderRating, setRiderRating) : stars(storeRating, setStoreRating)}
-              {feedback === 'store' && (
-                <TextInput style={styles.commentBox} placeholder="Write your thoughts..." placeholderTextColor={colors.muted} multiline value={feedbackText} onChangeText={setFeedbackText} />
-              )}
-              <Pressable
-                style={[styles.cta, { marginTop: 16 }]}
-                onPress={() => {
-                  if (feedback === 'rider') setFeedback('store');
-                  else {
-                    showToast(`Feedback submitted successfully. +${CYLINDER_POINTS[currentOrder?.cylinder_size ?? ''] ?? 0} pts!`);
-                    setFeedback('none');
-                    onNavigate('home');
-                  }
-                }}
-              >
-                <Text style={styles.ctaText}>{feedback === 'rider' ? 'Next' : 'Submit Feedback'}</Text>
-              </Pressable>
-            </View>
-          </>
-        )}
-      </Modal>
+      <OrderFeedbackModal
+        orderId={feedbackOrderId}
+        customerId={session?.user.id ?? null}
+        onClose={() => setFeedbackOrderId(null)}
+        onReviewed={setReviewedOrderId}
+      />
     </View>
   );
 }
@@ -2726,19 +2650,4 @@ const styles = StyleSheet.create({
   confirmTitle: { fontFamily: fonts.bold, fontSize: 20, color: colors.primary },
   confirmBody: { fontFamily: fonts.regular, fontSize: 11, color: colors.primary, textAlign: 'center', lineHeight: 18, marginBottom: 8 },
 
-  xfeedbackCard: { width: '100%', maxWidth: 338, backgroundColor: '#fff', borderRadius: radii.card, paddingBottom: 24, paddingTop: 60, paddingHorizontal: 16, alignItems: 'center' },
-  xfeedbackMascot: { position: 'absolute', top: -60, width: 119, height: 120 },
-  xfeedbackTitle: { fontFamily: fonts.bold, fontSize: 20, color: colors.primary, marginBottom: 8 },
-  xfeedbackBody: { fontFamily: fonts.semibold, fontSize: 10, color: colors.primary, textAlign: 'center', lineHeight: 16 },
-
-  feedbackSheet: { backgroundColor: '#fff', borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingHorizontal: 20, paddingTop: 20, paddingBottom: 32 },
-  progressRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 16, paddingRight: 40 },
-  pdot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.muted },
-  pdash: { flex: 1, height: 1, backgroundColor: colors.muted },
-  fbAvatarWrap: { alignItems: 'center', marginBottom: 12 },
-  fbAvatar: { width: 100, height: 100, borderRadius: 50, backgroundColor: colors.avatarGray, alignItems: 'center', justifyContent: 'center' },
-  fbTitle: { fontFamily: fonts.semibold, fontSize: 20, color: colors.heading, marginBottom: 4 },
-  fbSub: { fontFamily: fonts.regular, fontSize: 15, color: colors.grayText, marginBottom: 16 },
-  starsRow: { flexDirection: 'row', gap: 12, justifyContent: 'center', marginBottom: 8 },
-  commentBox: { borderWidth: 1, borderColor: colors.cardBorder, borderRadius: radii.chip, padding: 12, height: 100, fontFamily: fonts.regular, fontSize: 15, color: colors.label, textAlignVertical: 'top', marginTop: 16 },
 });

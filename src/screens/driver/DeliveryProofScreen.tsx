@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   Image,
   Pressable,
@@ -21,6 +21,7 @@ const MAX_PROOF_BYTES = 3 * 1024 * 1024;
 const MAX_PROOF_EDGE = 1600;
 
 async function compressProofPhoto(asset: ImagePicker.ImagePickerAsset): Promise<DeliveryProofPhoto> {
+  if (!asset.uri?.trim()) throw new Error('The selected photo has no file. Please choose another photo.');
   const longestEdge = Math.max(asset.width ?? 0, asset.height ?? 0);
   const resize = longestEdge > MAX_PROOF_EDGE
     ? asset.width >= asset.height
@@ -39,7 +40,7 @@ async function compressProofPhoto(asset: ImagePicker.ImagePickerAsset): Promise<
     const estimatedBytes = result.base64
       ? Math.ceil(result.base64.length * 0.75)
       : Number.POSITIVE_INFINITY;
-    if (estimatedBytes <= MAX_PROOF_BYTES) {
+    if (result.uri?.trim() && estimatedBytes > 0 && estimatedBytes <= MAX_PROOF_BYTES) {
       return {
         uri: result.uri,
         fileName: `delivery-proof-${Date.now()}.jpg`,
@@ -75,20 +76,25 @@ export function DeliveryProofScreen({
 }) {
   const [photo, setPhoto] = useState<DeliveryProofPhoto | null>(null);
   const [pickerError, setPickerError] = useState('');
+  const [preparing, setPreparing] = useState(false);
+  const picking = useRef(false);
 
   const choosePhoto = async (source: 'camera' | 'library') => {
+    if (busy || picking.current) return;
+    picking.current = true;
+    setPreparing(true);
     setPickerError('');
-    const permission = source === 'camera'
-      ? await ImagePicker.requestCameraPermissionsAsync()
-      : await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!permission.granted) {
-      setPickerError(source === 'camera'
-        ? 'Camera permission is required to take delivery proof.'
-        : 'Photo library permission is required to choose delivery proof.');
-      return;
-    }
-
     try {
+      const permission = source === 'camera'
+        ? await ImagePicker.requestCameraPermissionsAsync()
+        : await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!permission.granted) {
+        setPickerError(source === 'camera'
+          ? 'Camera permission is required to take delivery proof.'
+          : 'Photo library permission is required to choose delivery proof.');
+        return;
+      }
+
       const result = source === 'camera'
         ? await ImagePicker.launchCameraAsync({
             mediaTypes: ['images'],
@@ -105,6 +111,9 @@ export function DeliveryProofScreen({
       setPhoto(await compressProofPhoto(result.assets[0]));
     } catch (error) {
       setPickerError(error instanceof Error ? error.message : 'Could not prepare the photo.');
+    } finally {
+      picking.current = false;
+      setPreparing(false);
     }
   };
 
@@ -130,7 +139,7 @@ export function DeliveryProofScreen({
                 <Text style={styles.previewTitle}>Photo ready</Text>
                 <Text style={styles.previewName} numberOfLines={1}>{photo.fileName}</Text>
               </View>
-              <Pressable onPress={() => setPhoto(null)} hitSlop={8}>
+              <Pressable disabled={busy || preparing} onPress={() => setPhoto(null)} hitSlop={8}>
                 <Feather name="x" size={20} color={colors.textMuted} />
               </Pressable>
             </View>
@@ -144,11 +153,11 @@ export function DeliveryProofScreen({
         )}
 
         <View style={styles.pickerActions}>
-          <Pressable disabled={busy} onPress={() => void choosePhoto('camera')} style={({ pressed }) => [styles.pickerButton, pressed && styles.pressed]}>
+          <Pressable disabled={busy || preparing} onPress={() => void choosePhoto('camera')} style={({ pressed }) => [styles.pickerButton, pressed && styles.pressed]}>
             <Feather name="camera" size={19} color={colors.primary} />
             <Text style={styles.pickerButtonText}>{photo ? 'Retake photo' : 'Take photo'}</Text>
           </Pressable>
-          <Pressable disabled={busy} onPress={() => void choosePhoto('library')} style={({ pressed }) => [styles.pickerButton, pressed && styles.pressed]}>
+          <Pressable disabled={busy || preparing} onPress={() => void choosePhoto('library')} style={({ pressed }) => [styles.pickerButton, pressed && styles.pressed]}>
             <Feather name="image" size={19} color={colors.primary} />
             <Text style={styles.pickerButtonText}>Choose photo</Text>
           </Pressable>
@@ -168,9 +177,9 @@ export function DeliveryProofScreen({
 
         <PrimaryButton
           label={busy ? 'Submitting delivery…' : 'Submit Delivered'}
-          disabled={busy || !photo}
+          disabled={busy || preparing || !photo}
           onPress={() => {
-            if (photo) onSubmit(photo);
+            if (photo && !busy && !picking.current) onSubmit(photo);
           }}
         />
         <Text style={styles.finePrint}>The delivered milestone is saved only after the proof upload succeeds.</Text>

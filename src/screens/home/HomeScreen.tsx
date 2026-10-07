@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Image,
+  AppState,
   type LayoutChangeEvent,
   Pressable,
   ScrollView,
@@ -26,6 +27,9 @@ import { AppGuideOverlay, GUIDE_STEP_COUNT, type GuideRect } from '@/components/
 import { usePullToRefresh } from '@/hooks/usePullToRefresh';
 import { RewardsScreen } from '@/screens/home/RewardsScreen';
 import type { MainNavigateOptions, MainScreen, MainTab } from '@/navigation/types';
+import { useIsFocused } from '@react-navigation/native';
+import { latestActiveOrder, orderProgress } from '@/lib/orderProgress';
+import { OrderProgressTracker } from '@/components/orders/OrderProgressTracker';
 
 /**
  * Customer Home: integrated loyalty hero, delivery progress, and borderless
@@ -101,6 +105,7 @@ export function HomeScreen({
   onNavigate: (screen: MainScreen, opts?: MainNavigateOptions) => void;
 }) {
   const insets = useSafeAreaInsets();
+  const focused = useIsFocused();
   const { width: winW, height: winH } = useWindowDimensions();
   const { accountType, session } = useAuth();
   const { prices, loading: pricesLoading, error: pricesError, refresh: refreshPrices } = usePricing();
@@ -122,29 +127,35 @@ export function HomeScreen({
     status: string;
     cylinder_size: string;
     quantity: number;
+    created_at: string;
   };
   const [activeOrder, setActiveOrder] = useState<ActiveOrderRow | null>(null);
+  const activeProgress = activeOrder ? orderProgress(activeOrder.status) : null;
 
   useEffect(() => {
+    if (!focused) return;
+    let current = true;
     const load = async () => {
+      if (AppState.currentState && AppState.currentState !== 'active') return;
       try {
         const res = await apiFetch(`/service-requests/me?_t=${Date.now()}`);
-        if (!res.ok) return;
+        if (!res.ok) {
+          if (current) setActiveOrder(null);
+          return;
+        }
         const data = await res.json();
         const orders: ActiveOrderRow[] = data.serviceRequests ?? [];
-        const active = orders.find(
-          (o) => o.status === 'Pending' || o.status === 'Dispatched' || o.status === 'En Route',
-        );
-        setActiveOrder(active ?? null);
+        if (current) setActiveOrder(latestActiveOrder(orders));
       } catch {
-        // ignore
+        if (current) setActiveOrder(null);
       }
     };
     void load();
     // Poll every 10s so the card updates in near-real-time
     const interval = setInterval(load, 10_000);
-    return () => clearInterval(interval);
-  }, []);
+    const subscription = AppState.addEventListener('change', (state) => { if (state === 'active') void load(); });
+    return () => { current = false; clearInterval(interval); subscription.remove(); };
+  }, [focused]);
 
   // Sync Loyalty State
   const [points, setPoints] = useState(0);
@@ -460,14 +471,16 @@ export function HomeScreen({
 
           {/* Active order — only shown when a real in-flight order exists */}
           <View style={styles.content}>
-            {activeOrder ? (
+            {activeOrder && activeProgress ? (
               <>
                 <View style={styles.section} onLayout={captureY('active')}>
                   <Text style={styles.sectionTitle}>Active order</Text>
                   <Pressable
                     ref={activeRef}
-                    style={styles.activeOrder}
-                    onPress={() => onNavigate('orders', { tab: 'orders' })}
+                    style={({ pressed }) => [styles.activeOrder, pressed && { opacity: 0.85 }]}
+                    accessibilityRole="button"
+                    accessibilityLabel="View active order status"
+                    onPress={() => onNavigate('order-process', { orderId: activeOrder.id })}
                   >
                     <View style={styles.activeTopRow}>
                       <View style={styles.activeProduct}>
@@ -479,29 +492,11 @@ export function HomeScreen({
                         <Text style={styles.activeProductText}>{activeOrder.cylinder_size.toUpperCase()} × {activeOrder.quantity}</Text>
                       </View>
                       <Text style={styles.activeStatus}>
-                        {activeOrder.status === 'En Route' ? 'Out for delivery'
-                          : activeOrder.status === 'Dispatched' ? 'Preparing'
-                          : 'Order Confirmed'}
+                        {activeProgress.label}
                       </Text>
                     </View>
 
-                    <View style={styles.timeline}>
-                      <View style={styles.timelineBase} />
-                      <View style={[
-                        styles.timelineDone,
-                        { width: activeOrder.status === 'En Route' ? '66%'
-                          : activeOrder.status === 'Dispatched' ? '33%'
-                          : '5%' },
-                      ]} />
-                      <View style={[styles.timelineDot, styles.timelineDotStart]} />
-                      <View style={[styles.timelineDot, styles.timelineDotMiddle]} />
-                      <View style={[styles.timelineDot, styles.timelineDotEnd]} />
-                    </View>
-                    <View style={styles.timelineLabels}>
-                      <Text style={styles.timelineLabel}>Confirmed</Text>
-                      <Text style={styles.timelineLabel}>On the way</Text>
-                      <Text style={[styles.timelineLabel, activeOrder.status !== 'En Route' && styles.timelineLabelMuted]}>Delivered</Text>
-                    </View>
+                    <OrderProgressTracker status={activeOrder.status} active={focused && activeTab === 'home'} />
                   </Pressable>
                 </View>
 
@@ -705,9 +700,12 @@ const styles = StyleSheet.create({
     borderWidth: 3,
     backgroundColor: '#fff',
   },
-  timelineDotStart: { left: -1, borderColor: colors.success, backgroundColor: '#BDE8D8' },
-  timelineDotMiddle: { left: '48%', borderColor: colors.success, backgroundColor: colors.success },
-  timelineDotEnd: { right: -1, borderColor: colors.cardBorder },
+  timelineDotStart: { left: -1 },
+  timelineDotMiddle: { left: '48%' },
+  timelineDotEnd: { right: -1 },
+  timelineDotCompleted: { borderColor: colors.success, backgroundColor: colors.success },
+  timelineDotCurrent: { borderColor: '#BDE8D8', backgroundColor: colors.success },
+  timelineDotUpcoming: { borderColor: colors.cardBorder, backgroundColor: '#fff' },
   timelineLabels: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 2 },
   timelineLabel: { fontFamily: fonts.medium, fontSize: 10, color: colors.heading },
   timelineLabelMuted: { color: colors.muted },

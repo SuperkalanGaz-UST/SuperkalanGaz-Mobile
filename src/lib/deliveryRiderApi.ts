@@ -83,6 +83,18 @@ interface ApiResult {
   message?: string;
 }
 
+export async function getDeliveryRiderDetails(): Promise<DeliveryRiderInvitation> {
+  const response = await apiFetch('/delivery-rider-invitations/session/details');
+  return responseData<DeliveryRiderInvitation>(response, 'Could not load your details.');
+}
+
+export async function confirmDeliveryRiderDetails(): Promise<ApiResult> {
+  const response = await apiFetch('/delivery-rider-invitations/session/confirm-details', {
+    method: 'POST',
+  });
+  return responseData<ApiResult>(response, 'Could not confirm your details.');
+}
+
 async function responseData<T>(response: Response, fallback: string): Promise<T> {
   const data: unknown = await response.json().catch(() => null);
   if (!response.ok) throw new Error(apiErrorMessage(data, fallback));
@@ -187,14 +199,17 @@ export async function submitDeliveredWithProof(
   serviceRequestId: string,
   photo: DeliveryProofPhoto,
 ): Promise<DeliveryRiderDashboard> {
+  if (!photo.uri?.trim()) throw new Error('Choose a delivery photo before submitting.');
   const form = new FormData();
-  // React Native's FormData accepts this file descriptor at runtime. DOM's
-  // declaration only exposes Blob, so the narrow bridge is kept here.
-  form.append('proof', {
+  // DOM typings omit React Native's native file-descriptor overload.
+  const nativeForm = form as FormData & {
+    append(name: string, file: { uri: string; name: string; type: string }): void;
+  };
+  nativeForm.append('proof', {
     uri: photo.uri,
     name: photo.fileName,
     type: photo.mimeType,
-  } as unknown as Blob);
+  });
 
   const response = await apiFetch(
     `/delivery-rider/service-requests/${encodeURIComponent(serviceRequestId)}/deliver`,
