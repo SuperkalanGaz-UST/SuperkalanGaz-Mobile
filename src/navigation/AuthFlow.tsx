@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { View } from 'react-native';
 import { LoginScreen } from '@/screens/auth/LoginScreen';
 import { SignUpScreen } from '@/screens/auth/SignUpScreen';
+import { SignUpOtpScreen } from '@/screens/auth/SignUpOtpScreen';
 import {
   ForgotPasswordScreen,
   ForgotCheckScreen,
@@ -9,11 +10,11 @@ import {
   SuccessScreen,
 } from '@/screens/auth/ForgotFlow';
 import { useAuth } from '@/contexts/AuthContext';
-import type { AccountType, AuthScreen } from '@/navigation/types';
+import type { AccountType, AuthScreen, SignupDraft } from '@/navigation/types';
 
 /**
- * Signed-out customer flow. Registration is sent through NestJS and signs the
- * customer in immediately when email confirmation is disabled for the project.
+ * Signed-out customer flow. Registration goes through NestJS and email
+ * confirmation is handled by Supabase Auth before opening the customer app.
  */
 export function AuthFlow() {
   const {
@@ -24,6 +25,8 @@ export function AuthFlow() {
   } = useAuth();
   const [screen, setScreen] = useState<AuthScreen>('login');
   const [account, setAccount] = useState<AccountType>('household');
+  const [signupDraft, setSignupDraft] = useState<SignupDraft | null>(null);
+  const [signupEmail, setSignupEmail] = useState('');
   const [notice, setNotice] = useState('');
   const [recoveryEmail, setRecoveryEmail] = useState('');
 
@@ -33,8 +36,12 @@ export function AuthFlow() {
         return (
           <SignUpScreen
             account={account}
+            initialDraft={signupDraft}
             onAccountChange={setAccount}
-            onBack={() => setScreen('login')}
+            onBack={() => {
+              setSignupDraft(null);
+              setScreen('login');
+            }}
             onNext={async (signupDraft) => {
               const result = await signUp({
                 email: signupDraft.email,
@@ -45,8 +52,21 @@ export function AuthFlow() {
                 address: signupDraft.address,
                 accountType: signupDraft.accountType,
               });
-              return result.error;
+              if (result.error) return result.error;
+              if (result.needsConfirmation) {
+                setSignupDraft(signupDraft);
+                setSignupEmail(signupDraft.email);
+                setScreen('signup-otp');
+              }
+              return null;
             }}
+          />
+        );
+      case 'signup-otp':
+        return (
+          <SignUpOtpScreen
+            email={signupEmail}
+            onBack={() => setScreen('signup')}
           />
         );
       case 'forgot':
@@ -99,6 +119,7 @@ export function AuthFlow() {
             notice={notice}
             onSignUp={() => {
               setNotice('');
+              setSignupDraft(null);
               setScreen('signup');
             }}
             onForgot={() => {

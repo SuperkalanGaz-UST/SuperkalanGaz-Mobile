@@ -13,6 +13,7 @@ export type { AccountType };
 export type AuthScreen =
   | 'login'
   | 'signup'
+  | 'signup-otp'
   | 'forgot'
   | 'forgot-check'
   | 'set-password'

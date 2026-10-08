@@ -17,22 +17,24 @@ import type { AccountType, SignupDraft } from '@/navigation/types';
 
 export function SignUpScreen({
   account,
+  initialDraft,
   onAccountChange,
   onBack,
   onNext,
 }: {
   account: AccountType;
+  initialDraft: SignupDraft | null;
   onAccountChange: (value: AccountType) => void;
   onBack: () => void;
   onNext: (draft: SignupDraft) => Promise<string | null>;
 }) {
   const insets = useSafeAreaInsets();
-  const [firstName, setFirstName] = useState('');
-  const [lastName, setLastName] = useState('');
-  const [email, setEmail] = useState('');
-  const [mobileNumber, setMobileNumber] = useState('');
-  const [address, setAddress] = useState('');
-  const [password, setPassword] = useState('');
+  const [firstName, setFirstName] = useState(initialDraft?.firstName ?? '');
+  const [lastName, setLastName] = useState(initialDraft?.lastName ?? '');
+  const [email, setEmail] = useState(initialDraft?.email ?? '');
+  const [mobileNumber, setMobileNumber] = useState(initialDraft?.mobileNumber ?? '');
+  const [address, setAddress] = useState(initialDraft?.address ?? '');
+  const [password, setPassword] = useState(initialDraft?.password ?? '');
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
 

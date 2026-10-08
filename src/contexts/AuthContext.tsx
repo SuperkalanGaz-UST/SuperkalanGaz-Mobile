@@ -42,6 +42,28 @@ export interface ProfileUpdateInput {
   contactNumber: string;
 }
 
+async function requestSignUpOtpResend(email: string): Promise<{ error: string | null }> {
+  try {
+    const response = await apiPublicFetch('/auth/resend-signup-code', {
+      method: 'POST',
+      body: JSON.stringify({
+        method: 'email',
+        identifier: email.trim().toLowerCase(),
+      }),
+    });
+    const data: unknown = await response.json().catch(() => null);
+    return {
+      error: response.ok
+        ? null
+        : apiErrorMessage(data, 'Could not resend the verification code.'),
+    };
+  } catch (err) {
+    return {
+      error: err instanceof Error ? err.message : 'Could not resend the verification code.',
+    };
+  }
+}
+
 /** AsyncStorage key for the persisted account type (survives app restarts). */
 const ACCOUNT_TYPE_KEY = 'superkalan.accountType';
 const PASSWORD_RECOVERY_KEY = 'superkalan.passwordRecovery';
@@ -114,8 +136,12 @@ interface AuthContextValue {
   signIn: (identifier: string, password: string) => Promise<{ error: string | null }>;
   /** Refresh protected Auth claims after app-based Delivery Rider mobile verification. */
   refreshSession: () => Promise<{ error: string | null }>;
-  /** Register an email-based customer through NestJS without signup verification. */
-  signUp: (input: SignUpInput) => Promise<{ error: string | null }>;
+  /** Register a customer through NestJS and report whether email confirmation is needed. */
+  signUp: (input: SignUpInput) => Promise<{ error: string | null; needsConfirmation: boolean }>;
+  /** Verify the email code sent for a pending customer signup. */
+  verifySignUpOtp: (email: string, token: string) => Promise<{ error: string | null }>;
+  /** Resend the email code for a pending customer signup. */
+  resendSignUpOtp: (email: string) => Promise<{ error: string | null }>;
   /** Send the non-enumerating recovery email managed by Supabase Auth. */
   requestPasswordReset: (email: string) => Promise<{ error: string | null }>;
   /** Exchange the emailed recovery OTP for a short-lived recovery session. */
@@ -318,37 +344,58 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 input.accountType,
               );
               if (!existingSignIn.error) {
-                return { error: null };
+                return { error: null, needsConfirmation: false };
               }
               if (/not confirmed/i.test(existingSignIn.error)) {
-                return {
-                  error: 'This email is registered but not verified. Please contact support.',
-                };
+                const resent = await requestSignUpOtpResend(input.email);
+                return resent.error
+                  ? { error: resent.error, needsConfirmation: false }
+                  : { error: null, needsConfirmation: true };
               }
             }
-            return { error: registrationError };
+            return { error: registrationError, needsConfirmation: false };
           }
 
           const needsConfirmation =
             typeof data === 'object' && data !== null && 'needsConfirmation' in data &&
             data.needsConfirmation === true;
-          if (needsConfirmation) {
-            return {
-              error: 'Email verification is enabled. Signup without a verification code is unavailable; please contact support.',
-            };
-          }
+          if (needsConfirmation) return { error: null, needsConfirmation: true };
 
           const signedIn = await runSignIn(
             { email: input.email.trim().toLowerCase(), password: input.password },
             input.accountType,
           );
-          return { error: signedIn.error };
+          return { error: signedIn.error, needsConfirmation: false };
         } catch (err) {
           return {
             error: err instanceof Error ? err.message : 'Registration failed',
+            needsConfirmation: false,
           };
         }
       },
+      verifySignUpOtp: async (email, token) => {
+        const { data, error } = await supabase.auth.verifyOtp({
+          email: email.trim().toLowerCase(),
+          token,
+          type: 'email',
+        });
+        if (error) return { error: error.message };
+
+        const verifiedSession = data.session ?? (await supabase.auth.getSession()).data.session;
+        if (!verifiedSession) return { error: 'No signed-in customer session was created' };
+
+        const prepared = await ensureCustomerSession(verifiedSession);
+        if (!prepared.error) {
+          setSession(prepared.session);
+          const serverType = accountTypeFromSession(prepared.session);
+          if (serverType) {
+            setAccountType(serverType);
+            await AsyncStorage.setItem(ACCOUNT_TYPE_KEY, serverType);
+          }
+        }
+        return { error: prepared.error };
+      },
+      resendSignUpOtp: requestSignUpOtpResend,
       requestPasswordReset: async (email) => {
         const { error } = await supabase.auth.resetPasswordForEmail(email.trim().toLowerCase());
         return {

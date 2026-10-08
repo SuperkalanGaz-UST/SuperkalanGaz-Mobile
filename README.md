@@ -76,10 +76,10 @@ npx expo start
 ## Google SMTP for password recovery and invitations
 
 Customer registration starts in the mobile app and goes through the NestJS API,
-which assigns protected customer claims. Signup uses email and password without
-a verification code; the mobile number is stored as contact information. Google
-SMTP is configured in Supabase, not in this app, so the Google password is
-never bundled into the Expo build.
+which assigns protected customer claims. Signup uses email and password with an
+email verification code; the mobile number is stored as contact information and
+is not used for verification. Google SMTP is configured in Supabase, not in this
+app, so the Google password is never bundled into the Expo build.
 
 1. Turn on 2-Step Verification for the Google or Google Workspace sender account,
    then create an App Password for Supabase.
@@ -91,8 +91,9 @@ never bundled into the Expo build.
    - Password: the 16-character Google App Password (not the normal account password)
    - Sender email: the same Google email address
    - Sender name: `Superkalan Gaz`
-3. Configure Supabase email signup so email confirmation is disabled. The app
-   does not include a customer signup verification-code step.
+3. Under **Authentication → Email Templates → Confirm signup**, configure the email to show
+   the six-digit code using {{ .Token }}. Under **Authentication → Sign In / Providers →
+   Email**, set the email OTP length to 6.
 4. Under **Authentication → Email Templates → Reset password**, make the shared recovery
    template code-only. Both mobile and web verify this value with Supabase's `recovery`
    OTP type. Do not include `{{ .ConfirmationURL }}` in this template:
@@ -113,8 +114,8 @@ never bundled into the Expo build.
    <p>If you were not expecting this invitation, you can ignore this email.</p>
    ```
 
-The resulting delivery rule is: password recovery uses email codes; Franchise
-Administrator and Delivery Rider invitations use single-use links.
+The resulting delivery rule is: customer signup verification and password recovery use
+email codes; Franchise Administrator and Delivery Rider invitations use single-use links.
 
 For Delivery Rider onboarding, enable a supported Supabase Phone provider. In
 local custom-scheme development, allow `superkalan://delivery-rider-invitation**`. For laptop or
