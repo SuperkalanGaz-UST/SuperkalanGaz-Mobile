@@ -29,9 +29,11 @@ import {
 export function LoginScreen({
   notice,
   onForgot,
+  onSignUp,
 }: {
   notice?: string;
   onForgot: () => void;
+  onSignUp: () => void;
 }) {
   const insets = useSafeAreaInsets();
   const { signIn } = useAuth();
@@ -42,11 +44,11 @@ export function LoginScreen({
 
   const handleSignIn = async () => {
     const e: typeof errors = {};
-    if (!identifier.trim()) e.identifier = 'Email is required';
+    if (!identifier.trim()) e.identifier = 'Email or mobile number is required';
     if (!password.trim()) e.password = 'Password is required';
 
     if (identifier.trim() && !identifier.includes('@') && !normalizePhMobile(identifier)) {
-      e.identifier = 'Enter a valid email address';
+      e.identifier = 'Enter a valid email or PH mobile number';
     }
     setErrors(e);
     if (Object.keys(e).length > 0) return;
@@ -86,8 +88,8 @@ export function LoginScreen({
 
           <View style={{ gap: 16 }}>
             <TextField
-              label="Email Address"
-              placeholder="Email Address"
+              label="Email or mobile number"
+              placeholder="Email or mobile number"
               value={identifier}
               keyboardType="email-address"
               onChangeText={(value) => {
@@ -116,6 +118,10 @@ export function LoginScreen({
           {errors.form ? <Text style={styles.formError}>{errors.form}</Text> : null}
 
           <PrimaryButton label={busy ? 'Signing in…' : 'Sign in'} onPress={handleSignIn} disabled={busy} />
+          <Text style={styles.signupRow}>
+            Don't have an account?{' '}
+            <Text style={styles.signupLink} onPress={onSignUp}>Sign Up</Text>
+          </Text>
         </View>
       </ScrollView>
     </KeyboardAvoidingView>
@@ -148,4 +154,6 @@ const styles = StyleSheet.create({
   forgotWrap: { alignSelf: 'flex-end', marginTop: 4 },
   forgot: { fontFamily: fonts.regular, fontSize: 12, color: colors.primary, textDecorationLine: 'underline' },
   formError: { fontFamily: fonts.regular, fontSize: 12, color: colors.danger, textAlign: 'center' },
+  signupRow: { textAlign: 'center', fontFamily: fonts.regular, fontSize: 12, color: colors.textMuted },
+  signupLink: { fontFamily: fonts.medium, color: colors.primary, textDecorationLine: 'underline' },
 });

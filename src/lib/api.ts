@@ -80,6 +80,17 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
   return fetch(url, { ...init, headers });
 }
 
+/** Public NestJS endpoints such as customer registration, before a session exists. */
+export async function apiPublicFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  const headers = new Headers(init.headers);
+  const isMultipart = typeof FormData !== 'undefined' && init.body instanceof FormData;
+  if (isMultipart) headers.delete('Content-Type');
+  if (init.body && !isMultipart && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
+  }
+  return fetch(API_URL + '/api' + path, { ...init, headers });
+}
+
 /**
  * NestJS reports errors as { message: string | string[] } (validation errors
  * arrive as an array); older-style handlers used { error }. Normalize both.

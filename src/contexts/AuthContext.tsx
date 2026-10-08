@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { Session } from '@supabase/supabase-js';
-import { apiErrorMessage, apiFetch } from '@/lib/api';
+import { apiErrorMessage, apiFetch, apiPublicFetch } from '@/lib/api';
 import { normalizePhMobile } from '@/lib/phMobile';
 import { supabase } from '@/lib/supabase';
 
@@ -23,6 +23,16 @@ import { supabase } from '@/lib/supabase';
  */
 export type AccountType = 'household' | 'commercial';
 export type MobileRole = 'customer' | 'driver' | 'unsupported' | null;
+
+export interface SignUpInput {
+  email: string;
+  contactNumber: string;
+  password: string;
+  firstName: string;
+  lastName: string;
+  address: string;
+  accountType: AccountType;
+}
 
 export interface ProfileUpdateInput {
   firstName: string;
@@ -104,6 +114,8 @@ interface AuthContextValue {
   signIn: (identifier: string, password: string) => Promise<{ error: string | null }>;
   /** Refresh protected Auth claims after app-based Delivery Rider mobile verification. */
   refreshSession: () => Promise<{ error: string | null }>;
+  /** Register an email-based customer through NestJS without signup verification. */
+  signUp: (input: SignUpInput) => Promise<{ error: string | null }>;
   /** Send the non-enumerating recovery email managed by Supabase Auth. */
   requestPasswordReset: (email: string) => Promise<{ error: string | null }>;
   /** Exchange the emailed recovery OTP for a short-lived recovery session. */
@@ -281,6 +293,61 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
         setSession(data.session);
         return { error: null };
+      },
+      signUp: async (input) => {
+        try {
+          const response = await apiPublicFetch('/auth/register', {
+            method: 'POST',
+            body: JSON.stringify({
+              method: 'email',
+              identifier: input.email.trim().toLowerCase(),
+              ...(input.contactNumber ? { contactNumber: input.contactNumber } : {}),
+              password: input.password,
+              firstName: input.firstName,
+              lastName: input.lastName,
+              address: input.address,
+              accountType: input.accountType,
+            }),
+          });
+          const data: unknown = await response.json().catch(() => null);
+          if (!response.ok) {
+            const registrationError = apiErrorMessage(data, 'Registration failed');
+            if (/already (?:been )?registered/i.test(registrationError)) {
+              const existingSignIn = await runSignIn(
+                { email: input.email.trim().toLowerCase(), password: input.password },
+                input.accountType,
+              );
+              if (!existingSignIn.error) {
+                return { error: null };
+              }
+              if (/not confirmed/i.test(existingSignIn.error)) {
+                return {
+                  error: 'This email is registered but not verified. Please contact support.',
+                };
+              }
+            }
+            return { error: registrationError };
+          }
+
+          const needsConfirmation =
+            typeof data === 'object' && data !== null && 'needsConfirmation' in data &&
+            data.needsConfirmation === true;
+          if (needsConfirmation) {
+            return {
+              error: 'Email verification is enabled. Signup without a verification code is unavailable; please contact support.',
+            };
+          }
+
+          const signedIn = await runSignIn(
+            { email: input.email.trim().toLowerCase(), password: input.password },
+            input.accountType,
+          );
+          return { error: signedIn.error };
+        } catch (err) {
+          return {
+            error: err instanceof Error ? err.message : 'Registration failed',
+          };
+        }
       },
       requestPasswordReset: async (email) => {
         const { error } = await supabase.auth.resetPasswordForEmail(email.trim().toLowerCase());

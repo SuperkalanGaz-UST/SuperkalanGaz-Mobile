@@ -209,8 +209,8 @@ Shared primitives now live in `src/components/ui/`. Reuse them; don't re-style e
 - **Session-gated state machines** (not React Navigation). `RootNavigator.tsx` reads the real
   Supabase session and mounts one of two lightweight `useState` screen-enum machines that
   mirror the Figma Make prototype's `onNavigate` reducer:
-  - `AuthFlow.tsx` (signed out) → `login · forgot · forgot-check ·
-    set-password · success`.
+  - `AuthFlow.tsx` (signed out) → `login · signup · forgot ·
+    forgot-check · set-password · success`.
   - `MainApp.tsx` (signed in) → `home · orders · profile · order-process · faqs` (Home owns an
     internal `home | rewards` tab). A successful sign-in/up or sign-out flips the session and
     swaps the whole tree.
@@ -255,12 +255,12 @@ Shared primitives now live in `src/components/ui/`. Reuse them; don't re-style e
 | `src/theme/metrics.ts` | `spacing` · `radii` · `cardShadow` · `navShadow` (§4–§5) |
 | `src/navigation/types.ts` | Screen/tab enums shared by both machines |
 | `src/navigation/RootNavigator.tsx` | Session gate → `AuthFlow` or `MainApp` (§8) |
-| `src/navigation/AuthFlow.tsx` | Signed-out state machine (login/forgot) (§8) |
+| `src/navigation/AuthFlow.tsx` | Signed-out state machine (login/signup/forgot) (§8) |
 | `src/navigation/MainApp.tsx` | Signed-in state machine (home/orders/profile/order/faqs) (§8) |
 | `src/components/ui/controls.tsx` | **Reference:** buttons, `TextField`, `PhoneField`, and `OtpInput` (§7) |
 | `src/components/ui/AppHeader.tsx` · `BottomNav.tsx` · `SideMenu.tsx` | Shared shell (§7–§8) |
 | `src/components/ui/overlays.tsx` · `AppGuide.tsx` | Confirm/promo/toast modals + app tour (§7) |
-| `src/screens/auth/*` | `LoginScreen` (wired to `AuthContext`) and `ForgotFlow` |
+| `src/screens/auth/*` | `LoginScreen`, `SignUpScreen`, and `ForgotFlow` |
 | `src/screens/home/HomeScreen.tsx` · `RewardsScreen.tsx` | Home (points/reorder/quick-order) + Rewards surface |
 | `src/screens/orders/OrdersScreen.tsx` | Orders list/details + post-delivery CSAT feedback |
 | `src/screens/order/OrderProcessScreen.tsx` | Order flow: select → review → track (+ address/schedule/payment/confirm sheets) |

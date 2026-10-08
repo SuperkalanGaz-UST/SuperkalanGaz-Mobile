@@ -12,10 +12,21 @@ export type { AccountType };
 // ── Auth flow ────────────────────────────────────────────────────────────────
 export type AuthScreen =
   | 'login'
+  | 'signup'
   | 'forgot'
   | 'forgot-check'
   | 'set-password'
   | 'success';
+
+export interface SignupDraft {
+  firstName: string;
+  lastName: string;
+  email: string;
+  mobileNumber: string;
+  address: string;
+  password: string;
+  accountType: AccountType;
+}
 
 // ── Main app ─────────────────────────────────────────────────────────────────
 export type MainScreen = 'home' | 'orders' | 'more' | 'profile' | 'order-process' | 'faqs';

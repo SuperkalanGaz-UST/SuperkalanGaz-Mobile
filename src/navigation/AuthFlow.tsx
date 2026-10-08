@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { View } from 'react-native';
 import { LoginScreen } from '@/screens/auth/LoginScreen';
+import { SignUpScreen } from '@/screens/auth/SignUpScreen';
 import {
   ForgotPasswordScreen,
   ForgotCheckScreen,
@@ -8,25 +9,46 @@ import {
   SuccessScreen,
 } from '@/screens/auth/ForgotFlow';
 import { useAuth } from '@/contexts/AuthContext';
-import type { AuthScreen } from '@/navigation/types';
+import type { AccountType, AuthScreen } from '@/navigation/types';
 
 /**
- * Signed-out state machine for existing mobile accounts. Customer accounts are
- * provisioned outside the mobile app; this flow only handles sign-in and
- * password recovery.
+ * Signed-out customer flow. Registration is sent through NestJS and signs the
+ * customer in immediately when email confirmation is disabled for the project.
  */
 export function AuthFlow() {
   const {
     requestPasswordReset,
     verifyPasswordResetOtp,
     completePasswordReset,
+    signUp,
   } = useAuth();
   const [screen, setScreen] = useState<AuthScreen>('login');
+  const [account, setAccount] = useState<AccountType>('household');
   const [notice, setNotice] = useState('');
   const [recoveryEmail, setRecoveryEmail] = useState('');
 
   const render = () => {
     switch (screen) {
+      case 'signup':
+        return (
+          <SignUpScreen
+            account={account}
+            onAccountChange={setAccount}
+            onBack={() => setScreen('login')}
+            onNext={async (signupDraft) => {
+              const result = await signUp({
+                email: signupDraft.email,
+                contactNumber: signupDraft.mobileNumber,
+                password: signupDraft.password,
+                firstName: signupDraft.firstName,
+                lastName: signupDraft.lastName,
+                address: signupDraft.address,
+                accountType: signupDraft.accountType,
+              });
+              return result.error;
+            }}
+          />
+        );
       case 'forgot':
         return (
           <ForgotPasswordScreen
@@ -75,6 +97,10 @@ export function AuthFlow() {
         return (
           <LoginScreen
             notice={notice}
+            onSignUp={() => {
+              setNotice('');
+              setScreen('signup');
+            }}
             onForgot={() => {
               setNotice('');
               setScreen('forgot');

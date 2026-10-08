@@ -75,10 +75,11 @@ npx expo start
 
 ## Google SMTP for password recovery and invitations
 
-Supabase Auth owns password-recovery code generation and verification. Google
-SMTP is configured in Supabase rather than in this mobile app, so the Google
-password is never bundled into the Expo build. Customer accounts are provisioned
-outside the mobile app; there is no customer signup or signup OTP flow here.
+Customer registration starts in the mobile app and goes through the NestJS API,
+which assigns protected customer claims. Signup uses email and password without
+a verification code; the mobile number is stored as contact information. Google
+SMTP is configured in Supabase, not in this app, so the Google password is
+never bundled into the Expo build.
 
 1. Turn on 2-Step Verification for the Google or Google Workspace sender account,
    then create an App Password for Supabase.
@@ -90,7 +91,9 @@ outside the mobile app; there is no customer signup or signup OTP flow here.
    - Password: the 16-character Google App Password (not the normal account password)
    - Sender email: the same Google email address
    - Sender name: `Superkalan Gaz`
-3. Under **Authentication → Email Templates → Reset password**, make the shared recovery
+3. Configure Supabase email signup so email confirmation is disabled. The app
+   does not include a customer signup verification-code step.
+4. Under **Authentication → Email Templates → Reset password**, make the shared recovery
    template code-only. Both mobile and web verify this value with Supabase's `recovery`
    OTP type. Do not include `{{ .ConfirmationURL }}` in this template:
 
@@ -101,7 +104,7 @@ outside the mobile app; there is no customer signup or signup OTP flow here.
    <p>If you did not request a password reset, you can ignore this email.</p>
    ```
 
-4. Under **Authentication → Email Templates → Invite user**, keep invitations link-only.
+5. Under **Authentication → Email Templates → Invite user**, keep invitations link-only.
    Invitation acceptance proves the invited identity and must use the single-use URL:
 
    ```html
@@ -113,8 +116,8 @@ outside the mobile app; there is no customer signup or signup OTP flow here.
 The resulting delivery rule is: password recovery uses email codes; Franchise
 Administrator and Delivery Rider invitations use single-use links.
 
-For Delivery Rider onboarding, also enable a supported Supabase Phone provider. In local
-custom-scheme development, allow `superkalan://delivery-rider-invitation**`. For laptop or
+For Delivery Rider onboarding, enable a supported Supabase Phone provider. In
+local custom-scheme development, allow `superkalan://delivery-rider-invitation**`. For laptop or
 production web onboarding, allow the configured HTTPS/LAN
 `/delivery-rider-invitation**` route. The API sends the SMS OTP only after the recipient
 opens the verified email invitation and creates their private password in either client.
