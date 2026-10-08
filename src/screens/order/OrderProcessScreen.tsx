@@ -2586,7 +2586,7 @@ const styles = StyleSheet.create({
   addressPrivacyText: { flex: 1, fontFamily: fonts.regular, fontSize: 10, lineHeight: 15, color: colors.grayText },
   addressSaveButton: { marginTop: 2 },
   addressPickerLayer: {
-    ...StyleSheet.absoluteFill,
+    ...StyleSheet.absoluteFillObject,
     zIndex: 30,
     elevation: 30,
     alignItems: 'center',
