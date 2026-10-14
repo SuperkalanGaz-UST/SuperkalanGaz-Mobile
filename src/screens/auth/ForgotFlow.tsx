@@ -166,7 +166,7 @@ export function ForgotCheckScreen({
         />
       </View>
       <Text style={styles.resend}>
-        Haven't got the email yet?{' '}
+        Haven&apos;t got the email yet?{' '}
         <Text
           style={[styles.resendLink, resendCooldown > 0 && styles.resendLinkDisabled]}
           onPress={resendCooldown === 0 && !resending ? () => void resend() : undefined}

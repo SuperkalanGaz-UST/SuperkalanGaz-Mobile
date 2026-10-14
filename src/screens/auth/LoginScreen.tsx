@@ -119,7 +119,7 @@ export function LoginScreen({
 
           <PrimaryButton label={busy ? 'Signing in…' : 'Sign in'} onPress={handleSignIn} disabled={busy} />
           <Text style={styles.signupRow}>
-            Don't have an account?{' '}
+            Don&apos;t have an account?{' '}
             <Text style={styles.signupLink} onPress={onSignUp}>Sign Up</Text>
           </Text>
         </View>
