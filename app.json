@@ -6,6 +6,10 @@
     "orientation": "portrait",
     "scheme": "superkalan",
     "userInterfaceStyle": "light",
+    "web": {
+      "bundler": "metro",
+      "output": "single"
+    },
     "assetBundlePatterns": [
       "**/*"
     ],

@@ -28,3 +28,6 @@ expo-env.d.ts
 npm-debug.*
 .DS_Store
 *.log
+
+# Vercel checkout-local project link
+.vercel/
