@@ -73,6 +73,24 @@ cp .env.example .env                # then fill in API + Supabase values
 npx expo start
 ```
 
+## Physical phone connections
+
+Expo's tunnel serves the app bundle; it does not tunnel the NestJS API. A phone
+using an Expo tunnel cannot reach the Mac's API through `localhost:3001`.
+
+This workspace's ignored mobile `.env` selects the same deployed API as the web:
+
+```dotenv
+EXPO_PUBLIC_API_URL=https://superkalan-crm-api-7icfrdyg5a-as.a.run.app
+```
+
+Run `npm run start:tunnel`, scan its current QR code, and fully reload Expo Go
+after changing this value. Other clones must configure their own `.env`.
+For local API development, use LAN mode with both devices on a network that
+permits phone-to-computer connections and keep the local NestJS API running.
+The existing LAN configuration replaces a localhost API address with Expo's
+IPv4 host; it cannot do that when Expo supplies a tunnel hostname.
+
 ## Vercel browser deployment
 
 Vercel project `superkalan-crm-mobile` publishes the Expo web version at

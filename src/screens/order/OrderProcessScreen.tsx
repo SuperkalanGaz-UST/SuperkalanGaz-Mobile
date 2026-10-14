@@ -10,7 +10,7 @@ import { cardShadow, radii } from '@/theme/metrics';
 import { cylinderFor, images } from '@/lib/assets';
 import { PrimaryButton } from '@/components/ui/controls';
 import { Toast } from '@/components/ui/overlays';
-import { CylinderSize, formatPeso, usePricing } from '@/contexts/PricingContext';
+import { CylinderSize, formatPeso, useBranchPricing } from '@/contexts/PricingContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiErrorMessage, apiFetch } from '@/lib/api';
 import { normalizePhMobile } from '@/lib/phMobile';
@@ -280,7 +280,8 @@ export function OrderProcessScreen({ onNavigate, initialOrderId, onOrderPlaced }
 }) {
   const insets = useSafeAreaInsets();
   const { session } = useAuth();
-  const { prices, loading: pricesLoading, error: pricesError, refresh: refreshPrices } = usePricing();
+  const [selectedBranch, setSelectedBranch] = useState<BranchOption | null>(null);
+  const { prices, loading: pricesLoading, error: pricesError, refresh: refreshPrices } = useBranchPricing(selectedBranch?.id ?? null);
   const customerName = [
     metadataText(session?.user.user_metadata?.first_name),
     metadataText(session?.user.user_metadata?.last_name),
@@ -319,7 +320,6 @@ export function OrderProcessScreen({ onNavigate, initialOrderId, onOrderPlaced }
   const addressAreas = PH_ADDRESS_AREAS;
   const [address, setAddress] = useState<SavedAddress | null>(initialAddress);
   const [branches, setBranches] = useState<BranchOption[]>([]);
-  const [selectedBranch, setSelectedBranch] = useState<BranchOption | null>(null);
   const [payment, setPayment] = useState<Payment>('cash');
   const [tempPayment, setTempPayment] = useState<Payment>('cash');
   const [delivered, setDelivered] = useState(false);
@@ -566,6 +566,10 @@ export function OrderProcessScreen({ onNavigate, initialOrderId, onOrderPlaced }
       } else {
         setModal('confirmed');
       }
+      return;
+    }
+    if (pricesLoading || pricesError || products.length === 0) {
+      showToast('Load the selected branch’s prices before placing your order.');
       return;
     }
     if (deliverySchedule === 'later') {
