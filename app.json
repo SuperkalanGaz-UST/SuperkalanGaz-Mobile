@@ -20,8 +20,21 @@
       "apiUrl": "http://localhost:3001"
     },
     "plugins": [
-      "expo-status-bar",
-      "expo-font"
+      "expo-font",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Allow Superkalan Gaz to use your location to pin a delivery address and support Delivery Rider dispatch while the app is in use."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow Superkalan Gaz to select a delivery proof photo.",
+          "cameraPermission": "Allow Superkalan Gaz to take a delivery proof photo.",
+          "microphonePermission": false
+        }
+      ]
     ]
   }
 }

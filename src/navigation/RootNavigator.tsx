@@ -1,34 +1,19 @@
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import { useAuth } from '@/contexts/AuthContext';
+import { PricingProvider } from '@/contexts/PricingContext';
 import { AuthFlow } from '@/navigation/AuthFlow';
-import { HouseholdHomeScreen } from '@/screens/home/HouseholdHomeScreen';
-import { CommercialHomeScreen } from '@/screens/home/CommercialHomeScreen';
+import { DeliveryRiderApp, UnsupportedMobileRoleScreen } from '@/navigation/DeliveryRiderApp';
+import { MainApp } from '@/navigation/MainApp';
+import { DeliveryRiderMobileVerificationScreen } from '@/screens/driver/DeliveryRiderMobileVerificationScreen';
 import { colors } from '@/theme/colors';
 
 /**
- * Top-level navigation gate. Chooses between the auth flow (signed out) and the
- * customer app (signed in), or a splash while the session restores.
- *
- * Signed in, the app opens the rewards home for the customer's account type:
- * Household (points) vs Commercial (30+1 exchange). The account type comes from
- * the login tab (see AuthContext); an unknown type defaults to Household.
- *
- * SCAFFOLD: each account type currently shows a single home screen. Introduce
- * React Navigation here when the customer tabs land —
- *   <NavigationContainer>
- *     {session ? <AppTabs /> : <AuthStack />}
- *   </NavigationContainer>
- * with these customer-only surfaces (no staff/admin):
- *   - AuthStack   → screens/auth      (LoginScreen · register)
- *   - AppTabs
- *       · Home    → screens/home      (dashboard / reorder)
- *       · Orders  → screens/orders    (place order · track delivery MILESTONES only)
- *       · Loyalty → screens/loyalty   (points / rewards)
- *       · Profile → screens/profile   (CIM: profile, addresses, purchase history)
- *   - Feedback    → screens/feedback  (CSAT rating · complaint) — reached post-delivery
+ * Top-level session and protected-role gate. Customers and Delivery Riders get
+ * separate mobile state machines; staff web roles never fall through into the
+ * customer experience.
  */
 export function RootNavigator() {
-  const { session, accountType, initializing } = useAuth();
+  const { session, sessionRole, initializing } = useAuth();
 
   if (initializing) {
     return (
@@ -38,12 +23,34 @@ export function RootNavigator() {
     );
   }
 
-  if (!session) {
-    return <AuthFlow />;
+  if (!session) return <AuthFlow />;
+
+  if (sessionRole === 'customer') {
+    return (
+      <PricingProvider>
+        <MainApp />
+      </PricingProvider>
+    );
   }
 
-  // Signed in — route to the rewards home for this account type.
-  return accountType === 'commercial' ? <CommercialHomeScreen /> : <HouseholdHomeScreen />;
+  if (sessionRole === 'driver') {
+    const metadata = session.user.app_metadata;
+    const active = String(metadata.status ?? '').toLowerCase() === 'active';
+    const awaitingMobileVerification =
+      metadata.status === 'Pending' &&
+      typeof metadata.delivery_rider_invitation_accepted_at === 'string';
+    if (active) return <DeliveryRiderApp />;
+    if (awaitingMobileVerification) return <DeliveryRiderMobileVerificationScreen />;
+    return <UnsupportedMobileRoleScreen message="Finish creating and accepting your account from the invitation website first." />;
+  }
+
+  return (
+    <UnsupportedMobileRoleScreen
+      message={sessionRole === 'unsupported'
+        ? 'This staff role uses the web dashboard.'
+        : 'This account has no authorized mobile role. Sign out and use the correct invitation or customer account.'}
+    />
+  );
 }
 
 const styles = StyleSheet.create({
@@ -51,7 +58,7 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: colors.loginBackground,
+    backgroundColor: colors.authBg,
     padding: 24,
   },
 });

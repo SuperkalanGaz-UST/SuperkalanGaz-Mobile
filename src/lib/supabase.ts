@@ -2,10 +2,10 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createClient } from '@supabase/supabase-js';
 
 /**
- * Supabase client — AUTH ONLY. Sign-in/session lives here so the API client can
- * attach the access token. Do NOT read or write domain data through this client
- * (AGENTS.md §4): all data access goes through the branch-scoped NestJS API, or
- * it would bypass the server-side tenancy guard.
+ * Supabase client — AUTH ONLY. Sign-in, password recovery, and session handling
+ * live here so the API client can attach the access token. Do NOT read or write
+ * domain data through this client (AGENTS.md §4): all data access goes through
+ * the branch-scoped NestJS API, or it would bypass the server-side tenancy guard.
  *
  * The session is persisted in AsyncStorage so logins survive app restarts.
  */
