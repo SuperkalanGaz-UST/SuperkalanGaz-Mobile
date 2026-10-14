@@ -511,6 +511,7 @@ export function HomeScreen({
               onLayout={captureY('reorder')}
             >
               <Text style={styles.sectionTitle}>Order again</Text>
+              <Text style={styles.pricingNote}>Default prices shown. Your selected branch determines the final price.</Text>
               <View style={styles.productShelf}>
                 {orderAgain.map((item) => (
                   <Pressable
@@ -716,6 +717,7 @@ const styles = StyleSheet.create({
     marginVertical: 10,
   },
   orderAgainSection: { minHeight: 142 },
+  pricingNote: { fontFamily: fonts.regular, fontSize: 11, lineHeight: 17, color: colors.grayText, marginBottom: 10 },
   productShelf: { flexDirection: 'row', justifyContent: 'space-around', gap: 22 },
   product: { flex: 1, alignItems: 'center' },
   productCylinder: { width: 70, height: 98 },
