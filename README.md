@@ -91,6 +91,31 @@ permits phone-to-computer connections and keep the local NestJS API running.
 The existing LAN configuration replaces a localhost API address with Expo's
 IPv4 host; it cannot do that when Expo supplies a tunnel hostname.
 
+## Vercel browser deployment
+
+Vercel project `superkalan-crm-mobile` publishes the Expo web version at
+https://superkalan-crm-mobile.vercel.app. Its connected GitHub repository is
+`SuperkalanGaz-UST/SuperkalanGaz-Mobile`; pushes and merges into `main` trigger
+production builds automatically. Other branches do not publish previews.
+
+`vercel.json` runs `npm ci` and `npm run build:web`, serves `dist/`, and falls back
+to the single-page app for client navigation. `/api/*` is proxied to the existing
+HTTPS Cloud Run NestJS API before that fallback. This is edge routing only; domain
+logic, authentication guards, and database access remain in NestJS.
+
+The Vercel production build uses these three public client environment settings:
+
+- `EXPO_PUBLIC_API_URL=https://superkalan-crm-mobile.vercel.app` for same-origin API requests.
+- `EXPO_PUBLIC_SUPABASE_URL` for the existing Supabase Auth project.
+- `EXPO_PUBLIC_SUPABASE_ANON_KEY` for its public Auth key.
+
+Native Expo Go/Android/iOS builds use the direct NestJS URL,
+`https://superkalan-crm-api-7icfrdyg5a-as.a.run.app`. Environment changes require a new
+Vercel build. Do not upload service-role,
+database, SMTP, or other backend credentials. Vercel publishes the browser version;
+it does not distribute Android or iOS binaries. Native-device workflows still
+require their own verification.
+
 ## Google SMTP for password recovery and invitations
 
 Customer registration starts in the mobile app and goes through the NestJS API,

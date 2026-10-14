@@ -10,6 +10,7 @@
     "android": "expo start --go --android",
     "ios": "expo start --go --ios",
     "web": "expo start --web",
+    "build:web": "expo export --platform web",
     "lint": "eslint \"src/**/*.{ts,tsx}\"",
     "typecheck": "tsc --noEmit"
   },
