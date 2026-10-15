@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { View } from 'react-native';
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { LoginScreen } from '@/screens/auth/LoginScreen';
 import { SignUpScreen } from '@/screens/auth/SignUpScreen';
 import { SignUpOtpScreen } from '@/screens/auth/SignUpOtpScreen';
@@ -10,7 +11,15 @@ import {
   SuccessScreen,
 } from '@/screens/auth/ForgotFlow';
 import { useAuth } from '@/contexts/AuthContext';
-import type { AccountType, AuthScreen, SignupDraft } from '@/navigation/types';
+import type { AccountType, AuthScreen, AuthStack, PublicAuthScreen, SignupDraft } from '@/navigation/types';
+
+const Stack = createNativeStackNavigator<AuthStack>();
+
+function publicScreen(screen: AuthScreen): PublicAuthScreen {
+  if (screen === 'signup' || screen === 'signup-otp') return 'signup';
+  if (screen === 'login') return 'login';
+  return 'forgot';
+}
 
 /**
  * Signed-out customer flow. Registration goes through NestJS and email
@@ -23,14 +32,21 @@ export function AuthFlow() {
     completePasswordReset,
     signUp,
   } = useAuth();
-  const [screen, setScreen] = useState<AuthScreen>('login');
+  const [step, setStep] = useState<AuthScreen>('login');
   const [account, setAccount] = useState<AccountType>('household');
   const [signupDraft, setSignupDraft] = useState<SignupDraft | null>(null);
   const [signupEmail, setSignupEmail] = useState('');
   const [notice, setNotice] = useState('');
   const [recoveryEmail, setRecoveryEmail] = useState('');
 
-  const render = () => {
+  const render = (base: PublicAuthScreen, navigate: (screen: PublicAuthScreen) => void) => {
+    // Verification/reset steps depend on in-memory identity and proof. Keep
+    // passwords, OTPs and signup drafts out of link params and browser history.
+    const screen = publicScreen(step) === base ? step : base;
+    const setScreen = (next: AuthScreen) => {
+      setStep(next);
+      if (publicScreen(next) !== base) navigate(publicScreen(next));
+    };
     switch (screen) {
       case 'signup':
         return (
@@ -131,5 +147,13 @@ export function AuthFlow() {
     }
   };
 
-  return <View style={{ flex: 1 }}>{render()}</View>;
+  return (
+    <Stack.Navigator initialRouteName="login" screenOptions={{ headerShown: false, animation: 'none' }}>
+      {(['login', 'signup', 'forgot'] as const).map((screen) => (
+        <Stack.Screen key={screen} name={screen}>
+          {({ route, navigation }) => <View style={{ flex: 1 }}>{render(route.name, (next) => navigation.navigate(next))}</View>}
+        </Stack.Screen>
+      ))}
+    </Stack.Navigator>
+  );
 }

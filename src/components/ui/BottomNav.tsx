@@ -11,7 +11,7 @@ type FeatherName = keyof typeof Feather.glyphMap;
 
 const TABS: { key: MainTab; label: string; icon: FeatherName; screen: MainScreen }[] = [
   { key: 'home', label: 'Home', icon: 'home', screen: 'home' },
-  { key: 'rewards', label: 'Rewards', icon: 'gift', screen: 'home' },
+  { key: 'rewards', label: 'Rewards', icon: 'gift', screen: 'rewards' },
   { key: 'orders', label: 'History', icon: 'clipboard', screen: 'orders' },
   { key: 'more', label: 'More', icon: 'more-horizontal', screen: 'more' },
 ];
@@ -37,6 +37,9 @@ export function BottomNav({
     return (
       <Pressable
         key={t.key}
+        accessibilityRole="button"
+        accessibilityLabel={t.label}
+        accessibilityState={{ selected: on }}
         style={styles.tab}
         onPress={() => onNavigate(t.screen, { tab: t.key })}
       >

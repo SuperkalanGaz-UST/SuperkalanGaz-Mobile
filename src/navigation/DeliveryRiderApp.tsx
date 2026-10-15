@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ComponentProps } from 'react';
+import { usePreventRemove } from '@react-navigation/native';
+import { createNativeStackNavigator, type NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import {
   DeliveryRiderBottomNav,
-  type DeliveryRiderTab,
 } from '@/components/driver/DeliveryRiderChrome';
 import { PrimaryButton } from '@/components/ui/controls';
 import { useAuth } from '@/contexts/AuthContext';
@@ -27,14 +28,45 @@ import {
 } from '@/screens/driver/DeliveryRiderScreens';
 import { colors } from '@/theme/colors';
 import { fonts } from '@/theme/fonts';
+import type { DeliveryRiderStack } from '@/navigation/types';
 
-type DriverRoute = 'tabs' | 'proof' | 'complete';
+const Stack = createNativeStackNavigator<DeliveryRiderStack>();
+
+function useDeliveryRedirect(navigation: NativeStackNavigationProp<DeliveryRiderStack>, destination: 'home' | 'delivery' | 'complete' | null) {
+  useEffect(() => {
+    if (!destination) return;
+    // Deep links mount the nested navigator after the dashboard loads. Its
+    // action listener must register before a child guard dispatches a redirect.
+    const frame = requestAnimationFrame(() => navigation.replace(destination));
+    return () => cancelAnimationFrame(frame);
+  }, [navigation, destination]);
+}
+
+function ProofRoute({ assignment, completed, navigation, ...props }: Omit<ComponentProps<typeof DeliveryProofScreen>, 'assignment'> & {
+  assignment: DeliveryAssignment | null;
+  completed: boolean;
+  navigation: NativeStackNavigationProp<DeliveryRiderStack>;
+}) {
+  usePreventRemove(props.busy, () => {});
+  useDeliveryRedirect(navigation, props.busy ? null : completed ? 'complete' : !assignment?.inTransitAt ? 'delivery' : null);
+  // A proof URL cannot create an assignment or skip the in-transit milestone.
+  if (!assignment?.inTransitAt || completed) return null;
+  return <DeliveryProofScreen {...props} assignment={assignment} />;
+}
+
+function CompletionRoute({ assignment, navigation, onDone }: {
+  assignment: DeliveryAssignment | null;
+  navigation: NativeStackNavigationProp<DeliveryRiderStack>;
+  onDone: () => void;
+}) {
+  // Confirmation exists only after a successful API response in this session.
+  useDeliveryRedirect(navigation, assignment ? null : 'home');
+  return assignment ? <DeliveryCompletedScreen assignment={assignment} onDone={onDone} /> : null;
+}
 
 export function DeliveryRiderApp() {
   const { signOut } = useAuth();
   const [dashboard, setDashboard] = useState<DeliveryRiderDashboard | null>(null);
-  const [activeTab, setActiveTab] = useState<DeliveryRiderTab>('home');
-  const [route, setRoute] = useState<DriverRoute>('tabs');
   const [completedAssignment, setCompletedAssignment] = useState<DeliveryAssignment | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -99,121 +131,137 @@ export function DeliveryRiderApp() {
     );
   }
 
-  const assignment = dashboard.activeDelivery;
+  const renderScreen = (activeTab: keyof DeliveryRiderStack, navigation: NativeStackNavigationProp<DeliveryRiderStack>) => {
+    const assignment = dashboard.activeDelivery;
 
-  if (route === 'proof' && assignment) {
-    return (
-      <DeliveryProofScreen
-        assignment={assignment}
-        busy={busy}
-        submitError={error}
-        onBack={() => {
-          if (submittingProof.current) return;
-          setError('');
-          setRoute('tabs');
-          setActiveTab('delivery');
-        }}
-        onSubmit={(photo: DeliveryProofPhoto) => {
-          if (submittingProof.current || busy) return;
-          submittingProof.current = true;
-          const completing = assignment;
-          setBusy(true);
-          setError('');
-          void submitDeliveredWithProof(assignment.serviceRequestId, photo)
-            .then((next) => {
-              setDashboard(next);
-              setCompletedAssignment(completing);
-              setRoute('complete');
-            })
-            .catch((submitError: unknown) => {
-              setError(submitError instanceof Error ? submitError.message : 'Could not submit the delivery proof.');
-            })
-            .finally(() => {
-              submittingProof.current = false;
-              setBusy(false);
-            });
-        }}
-      />
-    );
-  }
-
-  if (route === 'complete' && completedAssignment) {
-    return (
-      <DeliveryCompletedScreen
-        assignment={completedAssignment}
-        onDone={() => {
-          setCompletedAssignment(null);
-          setRoute('tabs');
-          setActiveTab('home');
-        }}
-      />
-    );
-  }
-
-  const renderTab = () => {
-    if (activeTab === 'delivery') {
+    if (activeTab === 'proof') {
       return (
-        <DeliveryRiderDeliveryScreen
+        <ProofRoute
           assignment={assignment}
+          completed={Boolean(completedAssignment && (!assignment || completedAssignment.serviceRequestId === assignment.serviceRequestId))}
+          navigation={navigation}
           busy={busy}
-          error={error}
-          locationMessage={operationalLocation.message}
-          locationActive={operationalLocation.state === 'tracking'}
-          onStart={() => {
-            if (!assignment) return;
-            void runDashboardAction(() => startDelivery(assignment.serviceRequestId));
-          }}
-          onProof={() => {
+          submitError={error}
+          onBack={() => {
+            if (submittingProof.current) return;
             setError('');
-            setRoute('proof');
+            navigation.popTo('delivery');
+          }}
+          onSubmit={(photo: DeliveryProofPhoto) => {
+            if (!assignment || submittingProof.current || busy) return;
+            submittingProof.current = true;
+            const completing = assignment;
+            setBusy(true);
+            setError('');
+            void submitDeliveredWithProof(assignment.serviceRequestId, photo)
+              .then((next) => {
+                setDashboard(next);
+                setCompletedAssignment(completing);
+              })
+              .catch((submitError: unknown) => {
+                setError(submitError instanceof Error ? submitError.message : 'Could not submit the delivery proof.');
+              })
+              .finally(() => {
+                submittingProof.current = false;
+                setBusy(false);
+              });
           }}
         />
       );
     }
-    if (activeTab === 'profile') {
-      return <DeliveryRiderProfileScreen dashboard={dashboard} onSignOut={() => void signOut()} />;
+
+    if (activeTab === 'complete') {
+      return (
+        <CompletionRoute
+          assignment={completedAssignment}
+          navigation={navigation}
+          onDone={() => {
+            setCompletedAssignment(null);
+            navigation.reset({ index: 0, routes: [{ name: 'home' }] });
+          }}
+        />
+      );
     }
+
+    const renderTab = () => {
+      if (activeTab === 'delivery') {
+        return (
+          <DeliveryRiderDeliveryScreen
+            assignment={assignment}
+            busy={busy}
+            error={error}
+            locationMessage={operationalLocation.message}
+            locationActive={operationalLocation.state === 'tracking'}
+            onStart={() => {
+              if (!assignment) return;
+              void runDashboardAction(() => startDelivery(assignment.serviceRequestId));
+            }}
+          onProof={() => {
+            setCompletedAssignment(null);
+            setError('');
+              navigation.navigate('proof');
+            }}
+          />
+        );
+      }
+      if (activeTab === 'profile') {
+        return <DeliveryRiderProfileScreen dashboard={dashboard} onSignOut={() => void signOut()} />;
+      }
+      return (
+        <DeliveryRiderHomeScreen
+          dashboard={dashboard}
+          busy={busy}
+          error={error}
+          locationMessage={operationalLocation.message}
+          locationActive={operationalLocation.state === 'tracking'}
+          refreshing={refreshing}
+          onRefresh={() => void load(true)}
+          onAvailability={(available) => {
+            void (async () => {
+              if (available && !(await operationalLocation.ensurePermission())) return;
+              await runDashboardAction(() => setDeliveryRiderAvailability(available));
+            })();
+          }}
+          onAcceptOffer={() => {
+            if (!dashboard.currentOffer) return;
+            void runDashboardAction(() => acceptDeliveryOffer(dashboard.currentOffer!.offerId)).then((accepted) => {
+              if (accepted) {
+                setCompletedAssignment(null);
+                navigation.navigate('delivery');
+              }
+            });
+          }}
+          onDeclineOffer={() => {
+            if (!dashboard.currentOffer) return;
+            void runDashboardAction(() => declineDeliveryOffer(dashboard.currentOffer!.offerId));
+          }}
+          onOpenDelivery={() => navigation.navigate('delivery')}
+        />
+      );
+    };
+
     return (
-      <DeliveryRiderHomeScreen
-        dashboard={dashboard}
-        busy={busy}
-        error={error}
-        locationMessage={operationalLocation.message}
-        locationActive={operationalLocation.state === 'tracking'}
-        refreshing={refreshing}
-        onRefresh={() => void load(true)}
-        onAvailability={(available) => {
-          void (async () => {
-            if (available && !(await operationalLocation.ensurePermission())) return;
-            await runDashboardAction(() => setDeliveryRiderAvailability(available));
-          })();
-        }}
-        onAcceptOffer={() => {
-          if (!dashboard.currentOffer) return;
-          void runDashboardAction(() => acceptDeliveryOffer(dashboard.currentOffer!.offerId)).then((accepted) => {
-            if (accepted) setActiveTab('delivery');
-          });
-        }}
-        onDeclineOffer={() => {
-          if (!dashboard.currentOffer) return;
-          void runDashboardAction(() => declineDeliveryOffer(dashboard.currentOffer!.offerId));
-        }}
-        onOpenDelivery={() => setActiveTab('delivery')}
-      />
+      <View style={styles.app}>
+        {renderTab()}
+        <DeliveryRiderBottomNav
+          active={activeTab}
+          onChange={(tab) => {
+            setError('');
+            navigation.navigate(tab);
+          }}
+        />
+      </View>
     );
   };
 
   return (
-    <View style={styles.app}>
-      {renderTab()}
-      <DeliveryRiderBottomNav
-        active={activeTab}
-        onChange={(tab) => {
-          setError('');
-          setActiveTab(tab);
-        }}
-      />
-    </View>
+    <Stack.Navigator initialRouteName="home" screenOptions={{ headerShown: false, animation: 'none' }}>
+      {(['home', 'delivery', 'profile', 'proof', 'complete'] as const).map((screen) => (
+        <Stack.Screen key={screen} name={screen}>
+          {({ route, navigation }) => renderScreen(route.name, navigation)}
+        </Stack.Screen>
+      ))}
+    </Stack.Navigator>
   );
 }
 
