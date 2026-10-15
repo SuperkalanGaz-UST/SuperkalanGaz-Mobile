@@ -38,7 +38,8 @@ export function ProfileScreen({
   onNavigate: (screen: MainScreen, opts?: MainNavigateOptions) => void;
 }) {
   const { session, refreshProfile, updateProfile } = useAuth();
-  const [tab, setTab] = useState<ProfileSection>(initialSection);
+  const tab = initialSection;
+  const setTab = (section: ProfileSection) => onNavigate('profile', { profileSection: section });
   const [editMode, setEditMode] = useState(false);
   const [saving, setSaving] = useState(false);
   const [profileMessage, setProfileMessage] = useState('');

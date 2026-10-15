@@ -12,7 +12,8 @@
     "web": "expo start --web",
     "build:web": "expo export --platform web",
     "lint": "eslint \"src/**/*.{ts,tsx}\"",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:routing:browser": "node --test tests/mobile-routing.browser.test.mjs"
   },
   "dependencies": {
     "@expo-google-fonts/poppins": "^0.4.1",
@@ -50,6 +51,7 @@
     "eslint": "^9.39.5",
     "eslint-config-expo": "~57.0.2",
     "patch-package": "^8.0.1",
+    "playwright": "^1.61.1",
     "typescript": "~6.0.3"
   },
   "allowScripts": {

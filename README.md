@@ -168,6 +168,56 @@ opens the verified email invitation and creates their private password in either
 
 No SMTP credential belongs in `.env`, `.env.example`, or client-side TypeScript.
 
+## Screen routes and app links
+
+Customer and Delivery Rider screens share one React Navigation container, with
+separate stacks registered from protected session role/status claims. Browser URLs
+support refresh, bookmarks and Back/Forward. Installed native builds use the
+existing `superkalan://` scheme for the same paths.
+
+| Experience | Paths |
+|---|---|
+| Signed out | `/login`, `/signup`, `/forgot-password` |
+| Customer | `/customer/home`, `/customer/rewards`, `/customer/orders`, `/customer/more`, `/customer/profile`, `/customer/faqs` |
+| Customer order | `/customer/order` for a new request; `/customer/order/<order UUID>` for existing milestone tracking |
+| Delivery Rider | `/delivery-rider/home`, `/delivery-rider/delivery`, `/delivery-rider/profile` |
+| Delivery proof | `/delivery-rider/delivery/proof`; requires the API's assigned, in-transit delivery |
+| Pending accepted Delivery Rider | `/delivery-rider/verify-mobile`; existing activation flow only |
+
+For example, `superkalan://customer/orders` opens purchase history in an installed
+build. In Expo Go, use its current development URL followed by
+`/--/customer/orders`. HTTPS Universal Links/App Links are not configured by this
+change. See [Expo app-link guidance](https://docs.expo.dev/linking/into-your-app/).
+
+Signed-out protected links show login and resume the destination after a matching
+role signs in. Another persona's screen cannot override the authenticated role.
+Pending/inactive Delivery Riders and staff accounts cannot enter operations. No
+URL selects branch membership; NestJS still authorizes customer ownership and branch
+scope. Delivery Rider invitations remain on the dedicated staff website.
+
+Signup/recovery codes, passwords, photo uploads and order-form steps remain local
+to their workflows. Completion confirmation requires a successful delivery result
+in the current session; a fresh completion link returns home. Unknown paths show
+a client-side missing-page screen under the existing single-page hosting fallback.
+
+Route contracts live in `src/navigation/types.ts`; paths and native-link handling
+live in `src/navigation/linking.ts`. Linking and post-login restoration use the
+installed React Navigation 7 APIs, including its experimental
+`UNSTABLE_routeNamesChangeBehavior="lastUnhandled"` option. See
+[React Navigation linking](https://reactnavigation.org/docs/configuring-links/)
+and [authentication flows](https://reactnavigation.org/docs/auth-flow/).
+
+To verify an exported browser build using mocked Auth/API services:
+
+```bash
+npm run build:web
+npm run test:routing:browser
+```
+
+The browser test starts its own local static server; it never modifies real
+accounts, service requests or delivery milestones. Native bundles and real-device
+deep-link behavior require separate verification.
+
 ## Delivery Rider journey
 
 See [`docs/driver-registration-user-journey.md`](docs/driver-registration-user-journey.md)

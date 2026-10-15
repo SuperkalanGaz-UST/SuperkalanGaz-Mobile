@@ -64,7 +64,7 @@ export function DeliveryRiderBottomNav({
           const selected = tab.key === active;
           const color = selected ? colors.primary : colors.navInactive;
           return (
-            <Pressable key={tab.key} style={styles.navItem} onPress={() => onChange(tab.key)}>
+            <Pressable key={tab.key} style={styles.navItem} onPress={() => onChange(tab.key)} accessibilityRole="button" accessibilityLabel={tab.label} accessibilityState={{ selected }}>
               <Feather name={tab.icon} size={20} color={color} />
               <Text style={[styles.navText, { color }, selected && styles.navTextActive]}>{tab.label}</Text>
             </Pressable>

@@ -99,10 +99,12 @@ export function HomeScreen({
   initialTab = 'home',
   showGuide = false,
   onNavigate,
+  initialRewardsSection = 'my',
 }: {
   initialTab?: MainTab;
   showGuide?: boolean;
   onNavigate: (screen: MainScreen, opts?: MainNavigateOptions) => void;
+  initialRewardsSection?: 'my' | 'all';
 }) {
   const insets = useSafeAreaInsets();
   const focused = useIsFocused();
@@ -212,14 +214,14 @@ export function HomeScreen({
   }, [accountType]);
 
   useEffect(() => {
+    if (!focused) return;
     loadLoyalty();
     // Poll every 15s so points refresh automatically after a delivery completes
     const interval = setInterval(loadLoyalty, 15_000);
     return () => clearInterval(interval);
-  }, [loadLoyalty]);
+  }, [focused, loadLoyalty]);
 
-  const [activeTab, setActiveTab] = useState<MainTab>(initialTab);
-  const [rewardsSub, setRewardsSub] = useState<'my' | 'all'>('my');
+  const activeTab = initialTab;
   const [guideOpen, setGuideOpen] = useState(showGuide);
   const [guideStep, setGuideStep] = useState(0);
   const [guideRect, setGuideRect] = useState<GuideRect | null>(null);
@@ -252,8 +254,7 @@ export function HomeScreen({
   const refFor = { rewards: rewardsRef, active: activeRef, reorder: reorderRef, quick: quickRef };
 
   const openRewards = (sub: 'my' | 'all') => {
-    setRewardsSub(sub);
-    setActiveTab('rewards');
+    onNavigate('rewards', { rewardsSection: sub });
   };
 
   // The bottom nav is fixed, so its rect is computed rather than measured.
@@ -299,7 +300,10 @@ export function HomeScreen({
   };
 
   const openGuide = () => {
-    setActiveTab('home');
+    if (activeTab === 'rewards') {
+      onNavigate('home', { showGuide: true });
+      return;
+    }
     setGuideStep(0);
     setGuideRect(null);
     scrollRef.current?.scrollTo({ y: 0, animated: false });
@@ -332,8 +336,8 @@ export function HomeScreen({
             onProfile={() => onNavigate('profile', { profileSection: 'personal' })}
           />
           <RewardsScreen 
-            initialSub={rewardsSub} 
-            onExit={() => setActiveTab('home')} 
+            initialSub={initialRewardsSection}
+            onExit={() => onNavigate('home')}
             points={points}
             catalog={catalog}
             history={history}
@@ -564,14 +568,11 @@ export function HomeScreen({
 
       <BottomNav
         active={activeTab}
-        onNavigate={(screen, opts) => {
-          if (screen === 'home') setActiveTab(opts?.tab ?? 'home');
-          else onNavigate(screen, opts);
-        }}
+        onNavigate={onNavigate}
       />
 
       <AppGuideOverlay
-        visible={guideOpen}
+        visible={focused && guideOpen}
         step={guideStep}
         rect={guideRect}
         onNext={guideNext}
