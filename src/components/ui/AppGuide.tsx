@@ -30,7 +30,6 @@ export type GuideRect = { x: number; y: number; width: number; height: number };
 
 const GUIDE_DARK = 'rgba(0,0,0,0.62)';
 const PAD = 10; // padding around the highlighted element
-const MORPH_MS = 460; // spotlight/card morph duration
 const CARD_BOTTOM_GAP = 100; // space kept above the floating nav for a bottom-anchored card
 
 // The installed RN/React type combo degrades `Animated.View`'s props to `{}` (the
@@ -72,6 +71,8 @@ export function AppGuideOverlay({
   const { width, height } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const [cardH, setCardH] = useState(200);
+  const overlayRef = useRef<View>(null);
+  const [viewport, setViewport] = useState({ x: 0, y: 0, height });
   const data = STEPS[step] ?? STEPS[0];
   const isLast = step >= STEPS.length - 1;
 
@@ -79,17 +80,24 @@ export function AppGuideOverlay({
 
   // Where the spotlight box + card should sit for the current step.
   const targets = () => {
+    const top = Math.max(16, insets.top - viewport.y + 16);
+    const bottom = viewport.height - insets.bottom - 16;
     if (!rect) {
-      const cardY = data.anchor === 'top' ? insets.top + 84 : height - insets.bottom - CARD_BOTTOM_GAP - cardH;
+      const cardY = clamp(viewport.height - insets.bottom - CARD_BOTTOM_GAP - cardH, top + 100, bottom - cardH);
       // Collapse the box so the padded panels meet exactly (no leftover hole) →
       // a true full dim. `-PAD*2` cancels the PAD added back into the box edges.
       return { sx: width / 2, sy: height / 2, sw: -PAD * 2, sh: -PAD * 2, ring: 0, cardY };
     }
-    const below = rect.y + rect.height + PAD + 16;
-    const roomBelow = below + cardH + insets.bottom + CARD_BOTTOM_GAP <= height;
-    const rawCardY = roomBelow ? below : rect.y - PAD - 16 - cardH;
-    const cardY = clamp(rawCardY, insets.top + 8, height - cardH - insets.bottom - CARD_BOTTOM_GAP);
-    return { sx: rect.x, sy: rect.y, sw: rect.width, sh: rect.height, ring: 1, cardY };
+    // Native window measurements and Modal-local coordinates can have different
+    // origins, particularly around the status bar. Convert once, without adding
+    // the safe-area inset a second time.
+    const x = rect.x - viewport.x;
+    const y = rect.y - viewport.y;
+    const below = y + rect.height + PAD + 16 + 100;
+    const roomBelow = below + cardH <= bottom;
+    const rawCardY = roomBelow && step !== 5 ? below : y - PAD - 16 - cardH;
+    const cardY = clamp(rawCardY, top + 100, bottom - cardH);
+    return { sx: x, sy: y, sw: rect.width, sh: rect.height, ring: 1, cardY };
   };
 
   const t0 = targets();
@@ -131,20 +139,18 @@ export function AppGuideOverlay({
     const t = targets();
     const s = sig();
     if (prevSig.current === s) {
+      sx.setValue(t.sx); sy.setValue(t.sy); sw.setValue(t.sw); sh.setValue(t.sh);
+      ring.setValue(t.ring);
       cardY.setValue(t.cardY);
       return;
     }
     prevSig.current = s;
-    Animated.parallel([
-      Animated.timing(sx, { toValue: t.sx, duration: MORPH_MS, easing: Easing.inOut(Easing.cubic), useNativeDriver: false }),
-      Animated.timing(sy, { toValue: t.sy, duration: MORPH_MS, easing: Easing.inOut(Easing.cubic), useNativeDriver: false }),
-      Animated.timing(sw, { toValue: t.sw, duration: MORPH_MS, easing: Easing.inOut(Easing.cubic), useNativeDriver: false }),
-      Animated.timing(sh, { toValue: t.sh, duration: MORPH_MS, easing: Easing.inOut(Easing.cubic), useNativeDriver: false }),
-      Animated.timing(ring, { toValue: t.ring, duration: 260, easing: Easing.out(Easing.quad), useNativeDriver: false }),
-      Animated.timing(cardY, { toValue: t.cardY, duration: MORPH_MS, easing: Easing.inOut(Easing.cubic), useNativeDriver: false }),
-    ]).start();
+    // Never animate through an unrelated target or leave the previous hole open
+    // while Home is scrolling and measuring the next step.
+    sx.setValue(t.sx); sy.setValue(t.sy); sw.setValue(t.sw); sh.setValue(t.sh);
+    ring.setValue(t.ring); cardY.setValue(t.cardY);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step, rect, cardH, width, height, visible]);
+  }, [step, rect, cardH, width, height, visible, viewport, insets.top, insets.bottom]);
 
   // Derived spotlight-box edges.
   const boxLeft = Animated.subtract(sx, PAD);
@@ -156,7 +162,11 @@ export function AppGuideOverlay({
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <View style={styles.root}>
+      <View ref={overlayRef} style={styles.root} onLayout={() => {
+        overlayRef.current?.measureInWindow((x, y, _width, measuredHeight) => {
+          setViewport({ x, y, height: measuredHeight });
+        });
+      }}>
         {/* Four dark panels around the clear box */}
         <AView style={[styles.panel, { top: 0, left: 0, right: 0, height: boxTop }]} />
         <AView style={[styles.panel, { left: 0, right: 0, bottom: 0, top: boxBottom }]} />
