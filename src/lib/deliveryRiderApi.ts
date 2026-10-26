@@ -1,3 +1,4 @@
+import { Platform } from 'react-native';
 import { apiErrorMessage, apiFetch } from '@/lib/api';
 
 export type DeliveryRiderAvailability =
@@ -201,15 +202,25 @@ export async function submitDeliveredWithProof(
 ): Promise<DeliveryRiderDashboard> {
   if (!photo.uri?.trim()) throw new Error('Choose a delivery photo before submitting.');
   const form = new FormData();
-  // DOM typings omit React Native's native file-descriptor overload.
-  const nativeForm = form as FormData & {
-    append(name: string, file: { uri: string; name: string; type: string }): void;
-  };
-  nativeForm.append('proof', {
-    uri: photo.uri,
-    name: photo.fileName,
-    type: photo.mimeType,
-  });
+  if (Platform.OS === 'web') {
+    // Browser FormData stringifies native URI descriptors. Send the compressed
+    // image bytes as a file so NestJS receives the same proof part as on native.
+    const imageResponse = await fetch(photo.uri);
+    if (!imageResponse.ok) throw new Error('Could not read the delivery photo. Please choose it again.');
+    const image = await imageResponse.blob();
+    if (!image.size) throw new Error('The delivery photo is empty. Please choose another photo.');
+    form.append('proof', image, photo.fileName);
+  } else {
+    // DOM typings omit React Native's native file-descriptor overload.
+    const nativeForm = form as FormData & {
+      append(name: string, file: { uri: string; name: string; type: string }): void;
+    };
+    nativeForm.append('proof', {
+      uri: photo.uri,
+      name: photo.fileName,
+      type: photo.mimeType,
+    });
+  }
 
   const response = await apiFetch(
     `/delivery-rider/service-requests/${encodeURIComponent(serviceRequestId)}/deliver`,

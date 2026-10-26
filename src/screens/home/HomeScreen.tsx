@@ -245,6 +245,8 @@ export function HomeScreen({
 
   // Refs + content-relative offsets for the app-guide spotlight measurements.
   const scrollRef = useRef<ScrollView>(null);
+  const homeRef = useRef<View>(null);
+  const guideRun = useRef(0);
   const rewardsRef = useRef<View>(null);
   const activeRef = useRef<View>(null);
   const reorderRef = useRef<View>(null);
@@ -257,27 +259,37 @@ export function HomeScreen({
     onNavigate('rewards', { rewardsSection: sub });
   };
 
-  // The bottom nav is fixed, so its rect is computed rather than measured.
-  const navRect = (): GuideRect => ({ x: 12, y: winH - insets.bottom - 6 - 64, width: winW - 24, height: 64 });
+  // The fixed nav uses its unchanged layout constants, relative to the measured
+  // Home bounds (including the raised Order action), rather than screen guesses.
+  const navRect = (x: number, y: number, width: number, height: number): GuideRect => ({ x: x + 12, y: y + height - insets.bottom - 6 - 64 - 21, width: width - 24, height: 85 });
 
-  const scrollTop = () => scrollRef.current?.scrollTo({ y: 0, animated: true });
+  const scrollTop = () => scrollRef.current?.scrollTo({ y: 0, animated: false });
 
-  // Measure a ref's real window rect (after `delay` so any scroll settles) and set
-  // it as the spotlight. A 16px side inset keeps the box off the screen edges.
-  const applyRect = (ref: { current: unknown }, delay: number) => {
-    setTimeout(() => {
-      (ref.current as Measurable | null)?.measureInWindow((x, wy, w, h) => {
-        const nx = Math.max(x, 16);
-        const nw = Math.min(x + w, winW - 16) - nx;
-        setGuideRect({ x: nx, y: wy, width: nw, height: h });
+  // Publish only stable window bounds. A newer step invalidates every pending
+  // callback, including callbacks from a target that unmounts during the tour.
+  const applyRect = (ref: { current: unknown }, run: number) => {
+    let previous = '';
+    let stable = 0;
+    const measure = () => {
+      if (guideRun.current !== run) return;
+      (ref.current as Measurable | null)?.measureInWindow((x, y, width, height) => {
+        if (guideRun.current !== run || width <= 0 || height <= 0) return;
+        const signature = [x, y, width, height].map(Math.round).join(':');
+        stable = signature === previous ? stable + 1 : 0;
+        previous = signature;
+        if (stable >= 2) setGuideRect({ x, y, width, height });
+        else requestAnimationFrame(measure);
       });
-    }, delay);
+    };
+    requestAnimationFrame(() => requestAnimationFrame(measure));
   };
 
   // Move each step's target into view, then spotlight it. Chrome steps (welcome,
   // nav, help) scroll to the top; content steps scroll to the element. Runs on
   // both Next and Back, so going back also scrolls onto the assigned spotlight.
   const prepareStep = (i: number) => {
+    const run = ++guideRun.current;
+    setGuideRect(null);
     const key = GUIDE_TARGETS[i];
     if (!key) {
       scrollTop();
@@ -286,18 +298,37 @@ export function HomeScreen({
     }
     if (key === 'nav') {
       scrollTop();
-      setGuideRect(navRect());
+      requestAnimationFrame(() => homeRef.current?.measureInWindow((x, y, width, height) => {
+        if (guideRun.current === run) setGuideRect(navRect(x, y, width, height));
+      }));
       return;
     }
     if (key === 'help') {
       scrollTop();
-      applyRect(helpRef, 80); // header is fixed — no need to wait for a scroll
+      applyRect(helpRef, run);
       return;
     }
-    const y = layoutY.current[key] ?? 0;
-    scrollRef.current?.scrollTo({ y: Math.max(0, y - 28), animated: true });
-    applyRect(refFor[key], 340);
+    // Measure relative to the ScrollView itself: onLayout offsets have different
+    // parents (hero/content) and cannot be used as content offsets.
+    scrollTop();
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (guideRun.current !== run) return;
+      (scrollRef.current as unknown as Measurable | null)?.measureInWindow((_x, scrollY) => {
+        refFor[key].current?.measureInWindow((_tx, targetY) => {
+          if (guideRun.current !== run) return;
+          scrollRef.current?.scrollTo({ y: Math.max(0, targetY - scrollY - insets.top - 26), animated: false });
+          applyRect(refFor[key], run);
+        });
+      });
+    }));
   };
+
+  useEffect(() => {
+    if (guideOpen && focused) prepareStep(guideStep);
+    return () => { guideRun.current += 1; };
+    // Remeasure after target mount, resizing, and every step transition.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [guideOpen, guideStep, focused, winW, winH, insets.top, insets.bottom, !!activeOrder]);
 
   const openGuide = () => {
     if (activeTab === 'rewards') {
@@ -312,13 +343,13 @@ export function HomeScreen({
   const guideNext = () => {
     if (guideStep >= GUIDE_STEP_COUNT - 1) return setGuideOpen(false);
     const n = guideStep + 1;
+    setGuideRect(null);
     setGuideStep(n);
-    prepareStep(n);
   };
   const guideBack = () => {
     const p = Math.max(0, guideStep - 1);
+    setGuideRect(null);
     setGuideStep(p);
-    prepareStep(p);
   };
 
   const captureY = (key: string) => (e: LayoutChangeEvent) => {
@@ -326,7 +357,7 @@ export function HomeScreen({
   };
 
   return (
-    <View style={styles.flex}>
+    <View ref={homeRef} collapsable={false} style={styles.flex}>
       {activeTab === 'rewards' ? (
         <>
           <AppHeader
@@ -477,10 +508,9 @@ export function HomeScreen({
           <View style={styles.content}>
             {activeOrder && activeProgress ? (
               <>
-                <View style={styles.section} onLayout={captureY('active')}>
+                <View ref={activeRef} collapsable={false} style={styles.section} onLayout={captureY('active')}>
                   <Text style={styles.sectionTitle}>Active order</Text>
                   <Pressable
-                    ref={activeRef}
                     style={({ pressed }) => [styles.activeOrder, pressed && { opacity: 0.85 }]}
                     accessibilityRole="button"
                     accessibilityLabel="View active order status"

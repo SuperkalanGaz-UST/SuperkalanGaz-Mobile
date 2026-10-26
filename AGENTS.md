@@ -158,7 +158,7 @@ Hard constraints:
 
 ## 8. Module & Domain Rules `[api] [web] [mobile]`
 
-**5 confirmed modules. There is no Supply Chain module.**
+**5 confirmed modules, plus the web-only salary/overtime expense extension in §11. There is no Supply Chain module.**
 
 1. **Customer Information Management (CIM)** — profiles, addresses, purchase history.
 2. **Service Request & Dispatch (SRD)** — digital order creation, Delivery Rider offer/assignment,
@@ -245,9 +245,14 @@ Management as practices this system implements. Vocabulary: "Service Request" (o
 
 Do not write code for, scaffold, or suggest:
 - Live corporate **ERP** integration for supply-chain replenishment.
-- **HR / payroll**, employee records, **BIR / tax** reporting, or **accounting**.
+- General **HR / payroll**, employee records, **BIR / tax** reporting, or **accounting**,
+  except the web-only salary/overtime expense extension in workspace [AGENTS.md §11](../AGENTS.md#11-prohibited--out-of-scope-all).
 - Additional ITIL practices beyond the four in §9.
-- Any feature outside the 5 modules in §8.
+- Any feature outside the 5 modules in §8 and that approved web-only expense extension.
+
+**Client-approved exception (2026-10-20):** The workspace §11 salary/overtime expense
+extension is Branch Owner only on web. It adds no mobile screens or salary/overtime data
+access; Customer and Delivery Rider mobile flows remain outside that extension.
 
 **In scope (do not confuse with the above):** low-stock alerts and reorder *logging* —
 configurable thresholds against a **mock JSON supply endpoint**. Only the *live ERP
