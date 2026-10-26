@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
+import { AppState } from 'react-native';
 import * as Location from 'expo-location';
 import { updateDeliveryRiderOperationalLocation } from '@/lib/deliveryRiderApi';
 
 export type OperationalLocationState =
   | 'inactive'
   | 'requesting'
+  | 'locating'
+  | 'paused'
   | 'tracking'
   | 'permission-denied'
   | 'error';
@@ -19,6 +22,8 @@ interface OperationalLocationStatus {
 const messages: Record<OperationalLocationState, string> = {
   inactive: 'Operational GPS starts when you go Available.',
   requesting: 'Requesting location permission…',
+  locating: 'Waiting for a phone GPS reading…',
+  paused: 'Operational GPS is paused. Return to the app to share your location.',
   tracking: 'Operational GPS is active for dispatch.',
   'permission-denied': 'Location permission is required before going Available.',
   error: 'Operational GPS could not sync. Keep the app open and check your connection.',
@@ -26,7 +31,7 @@ const messages: Record<OperationalLocationState, string> = {
 
 /**
  * Foreground-only phone GPS for Service Request and dispatch operations. Expo
- * stops this watcher when the app is not in use; SinoTrack ST-901/Traccar stays
+ * removes this watcher when the app is not in use; SinoTrack ST-901/Traccar stays
  * authoritative for vehicle geofencing and PMS.
  */
 export function useDeliveryRiderOperationalLocation(
@@ -34,6 +39,12 @@ export function useDeliveryRiderOperationalLocation(
 ): OperationalLocationStatus {
   const [state, setState] = useState<OperationalLocationState>('inactive');
   const [lastSyncedAt, setLastSyncedAt] = useState<Date | null>(null);
+  const [appState, setAppState] = useState(AppState.currentState);
+
+  useEffect(() => {
+    const listener = AppState.addEventListener('change', setAppState);
+    return () => listener?.remove();
+  }, []);
 
   const ensurePermission = useCallback(async (): Promise<boolean> => {
     setState('requesting');
@@ -46,7 +57,7 @@ export function useDeliveryRiderOperationalLocation(
         setState('permission-denied');
         return false;
       }
-      setState(enabled ? 'tracking' : 'inactive');
+      setState(enabled ? 'locating' : 'inactive');
       return true;
     } catch {
       setState('error');
@@ -60,6 +71,10 @@ export function useDeliveryRiderOperationalLocation(
       setLastSyncedAt(null);
       return;
     }
+    if (appState !== 'active') {
+      setState('paused');
+      return;
+    }
 
     let active = true;
     let subscription: Location.LocationSubscription | null = null;
@@ -69,14 +84,14 @@ export function useDeliveryRiderOperationalLocation(
       if (!granted || !active) return;
 
       try {
-        subscription = await Location.watchPositionAsync(
+        const watcher = await Location.watchPositionAsync(
           {
             accuracy: Location.Accuracy.High,
             timeInterval: 15_000,
             distanceInterval: 25,
           },
           (position) => {
-            if (!active) return;
+            if (!active || AppState.currentState !== 'active') return;
             void updateDeliveryRiderOperationalLocation({
               latitude: Number(position.coords.latitude.toFixed(8)),
               longitude: Number(position.coords.longitude.toFixed(8)),
@@ -93,6 +108,9 @@ export function useDeliveryRiderOperationalLocation(
               });
           },
         );
+        // A pending watcher may finish after Offline, backgrounding or logout.
+        if (active) subscription = watcher;
+        else watcher.remove();
       } catch {
         if (active) setState('error');
       }
@@ -103,7 +121,7 @@ export function useDeliveryRiderOperationalLocation(
       active = false;
       subscription?.remove();
     };
-  }, [enabled, ensurePermission]);
+  }, [enabled, ensurePermission, appState]);
 
   return { state, message: messages[state], lastSyncedAt, ensurePermission };
 }

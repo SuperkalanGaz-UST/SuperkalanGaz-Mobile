@@ -259,6 +259,104 @@ test('proof links require an authorized in-transit assignment; completion cannot
   }
 });
 
+test('a chosen delivery photo uploads as a JPEG file before confirming delivery', { timeout: 30_000 }, async () => {
+  const assignment = {
+    serviceRequestId: '00000000-0000-4000-8000-000000000006', srCode: 'SR-PROOF-TEST',
+    customerName: 'Test Customer', deliveryAddress: 'Test address', cylinderSize: '11kg', quantity: 1,
+    vehicleLabel: 'TEST 123', requestedAt: new Date().toISOString(), dispatchedAt: new Date().toISOString(),
+    inTransitAt: new Date().toISOString(),
+  };
+  const { context, page, errors } = await newContext(sessionFor('driver'), { dashboard: driverDashboard(assignment) });
+  let uploads = 0;
+  try {
+    await context.route('**/api/delivery-rider/service-requests/*/deliver', async route => {
+      const request = route.request();
+      const parsed = await new Response(request.postDataBuffer(), {
+        headers: { 'content-type': request.headers()['content-type'] },
+      }).formData();
+      const proof = parsed.get('proof');
+      if (!(proof instanceof File)) return route.fulfill({ status: 400, json: { message: 'A delivery proof photo is required' } });
+      assert.match(proof.name, /^delivery-proof-.*\.jpg$/);
+      assert.equal(proof.type, 'image/jpeg');
+      const bytes = Buffer.from(await proof.arrayBuffer());
+      assert.equal(bytes.readUInt16BE(0), 0xffd8, 'The uploaded file contains JPEG bytes');
+      assert.ok(bytes.length < 3 * 1024 * 1024);
+      uploads++;
+      await route.fulfill({ json: driverDashboard() });
+    });
+    await page.goto(`${baseUrl}/delivery-rider/delivery/proof`);
+    await page.getByText('Add a delivery photo', { exact: true }).waitFor();
+    const chooserEvent = page.waitForEvent('filechooser');
+    await page.getByText('Choose photo', { exact: true }).click();
+    const chooser = await chooserEvent;
+    await chooser.setFiles({
+      name: 'proof.png', mimeType: 'image/png',
+      buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII=', 'base64'),
+    });
+    await page.getByText('Photo ready', { exact: true }).waitFor();
+    await page.getByText('Submit Delivered', { exact: true }).click();
+    await page.getByText('Marked as delivered', { exact: true }).waitFor();
+    assert.equal(uploads, 1);
+    assert.equal(await page.getByText('A delivery proof photo is required', { exact: true }).count(), 0);
+    assert.deepEqual(errors, []);
+  } finally { await context.close(); }
+});
+
+test('Delivery Rider phone GPS syncs only while Available and the app is visible', { timeout: 30_000 }, async () => {
+  const dashboard = driverDashboard();
+  dashboard.deliveryRider.availability = 'Available';
+  const { context, page, errors } = await newContext(sessionFor('driver'), { dashboard });
+  const samples = [];
+  try {
+    await context.grantPermissions(['geolocation']);
+    await context.addInitScript(() => {
+      window.testGpsWatchers = new Map();
+      window.testGpsClears = 0;
+      let nextId = 0;
+      navigator.geolocation.watchPosition = callback => {
+        const id = ++nextId;
+        window.testGpsWatchers.set(id, callback);
+        // Native providers deliver the first fix asynchronously.
+        setTimeout(() => callback({ coords: { latitude: 14.45, longitude: 120.98, accuracy: 8 }, timestamp: Date.now() }), 50);
+        return id;
+      };
+      navigator.geolocation.clearWatch = id => {
+        window.testGpsClears++;
+        window.testGpsWatchers.delete(id);
+      };
+    });
+    await context.route('**/api/delivery-rider/location', async route => {
+      const sample = route.request().postDataJSON();
+      samples.push(sample);
+      assert.deepEqual(Object.keys(sample).sort(), ['accuracyM', 'capturedAt', 'latitude', 'longitude']);
+      await route.fulfill({ json: { recorded: true, receivedAt: new Date().toISOString() } });
+    });
+    await context.route('**/api/delivery-rider/availability', async route => {
+      assert.deepEqual(route.request().postDataJSON(), { available: false });
+      await route.fulfill({ json: driverDashboard() });
+    });
+    await page.goto(`${baseUrl}/delivery-rider/home`);
+    await page.getByText('Operational GPS is active for dispatch.', { exact: true }).waitFor();
+    assert.ok(samples.length > 0);
+    await page.evaluate(() => {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await page.getByText('Operational GPS is paused. Return to the app to share your location.', { exact: true }).waitFor();
+    assert.equal(await page.evaluate(() => window.testGpsWatchers.size), 0);
+    await page.evaluate(() => {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await page.getByText('Operational GPS is active for dispatch.', { exact: true }).waitFor();
+    await page.getByText('Go Offline', { exact: true }).click();
+    await page.getByText('Operational GPS starts when you go Available.', { exact: true }).waitFor();
+    assert.equal(await page.evaluate(() => window.testGpsWatchers.size), 0);
+    assert.ok(await page.evaluate(() => window.testGpsClears >= 2));
+    assert.deepEqual(errors, []);
+  } finally { await context.close(); }
+});
+
 test('unknown and malformed order links show a missing-page state', { timeout: 30_000 }, async () => {
   const { context, page, requests, errors } = await newContext(sessionFor('customer'));
   try {
