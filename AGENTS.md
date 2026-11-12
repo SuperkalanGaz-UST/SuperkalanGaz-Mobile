@@ -146,12 +146,13 @@ Hard constraints:
   identity; the API binds a single-use, expiring invitation to the Owner's JWT-derived branch.
 - **Delivery Rider web access is registration-only.** The dedicated token-gated web page
   reviews the invitation, creates the password, and records final invitation acceptance.
-  The rider then signs in to mobile for PH mobile verification before any operations appear.
+  The Delivery Rider then signs in with email and password and confirms their contact details
+  before any operations appear.
   Supabase may return the verified pending `driver` session to the web root, which routes it
   to the registration page using the same activation pattern as Franchise Administrator.
 - **Invitation acceptance is the authorization.** Website acceptance consumes the invitation
-  while the account remains pending. Only the API activates it after app-based PH mobile
-  verification. No Branch Manager approval or applicant-selected branch is allowed.
+  while the account remains pending. Only the API activates it after app-based details
+  confirmation. No Branch Manager approval or applicant-selected branch is allowed.
 - **Customers see delivery status milestones only — never live GPS coordinates.**
 
 ---
@@ -206,8 +207,9 @@ Shared workflow:
    identity/branch, set their own password, and accept the invitation.
 3. The API consumes the invitation, writes protected Delivery Rider role/branch claims, and records
    immutable attribution to the Branch Owner.
-4. After app sign-in, the rider verifies the invitation-bound PH mobile number. The API then
-   activates the account; after session refresh the rider appears Offline and unassigned.
+4. After app sign-in, the Delivery Rider confirms the saved name and PH mobile contact
+   number. The API activates the account. After session refresh the rider appears Offline
+   and unassigned.
    The Branch Manager manages vehicle readiness, not membership authorization.
 
 ---

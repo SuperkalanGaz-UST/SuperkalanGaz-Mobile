@@ -47,7 +47,7 @@ export function DeliveryRiderMobileVerificationScreen() {
       })
       .catch((loadError: unknown) => {
         if (current) {
-          setError(loadError instanceof Error ? loadError.message : 'Mobile verification is unavailable.');
+          setError(loadError instanceof Error ? loadError.message : 'Could not load your contact details.');
         }
       })
       .finally(() => {
