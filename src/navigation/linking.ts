@@ -15,7 +15,7 @@ const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export const mobileLinking: LinkingOptions<RootStack> = {
   prefixes: ['superkalan://'],
-  getInitialURL: async () => appLink(await Linking.getInitialURL()),
+  getInitialURL: async () => appLink((await Linking.getInitialURL()) ?? null),
   subscribe(listener) {
     const subscription = Linking.addEventListener('url', ({ url }) => {
       const target = appLink(url);

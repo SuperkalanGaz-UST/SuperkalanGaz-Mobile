@@ -17,15 +17,14 @@ function ProgressLine({ fill, sweep, moving, green, gray, style }: {
   style: StyleProp<ViewStyle>;
 }) {
   const [width, setWidth] = useState(0);
-  const transform = (value: Animated.Value | Animated.AnimatedInterpolation<number>) => [
-    { translateX: value.interpolate({ inputRange: [0, 1], outputRange: [-width / 2, 0] }) },
-    { scaleX: value },
-  ];
+  const translation = { inputRange: [0, 1], outputRange: [-width / 2, 0] };
   return (
     <View style={[style, { backgroundColor: gray, overflow: 'hidden' }]} onLayout={(event) => setWidth(event.nativeEvent.layout.width)}>
-      {width > 0 && <Animated.View style={[styles.fill, { width, backgroundColor: green, transform: transform(fill) }]} />}
+      {width > 0 && <Animated.View style={[styles.fill, {
+        width, backgroundColor: green, transform: [{ translateX: fill.interpolate(translation) }, { scaleX: fill }],
+      }]} />}
       {width > 0 && moving && <Animated.View style={[styles.fill, {
-        width, backgroundColor: green, transform: transform(sweep),
+        width, backgroundColor: green, transform: [{ translateX: sweep.interpolate(translation) }, { scaleX: sweep }],
         opacity: sweep.interpolate({ inputRange: [0, 0.04, 0.87, 1], outputRange: [0, 1, 1, 0] }),
       }]} />}
     </View>

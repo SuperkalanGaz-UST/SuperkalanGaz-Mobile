@@ -1,14 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  AccessibilityInfo,
+  Animated,
+  Easing,
   Image,
   AppState,
-  type LayoutChangeEvent,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
   useWindowDimensions,
   View,
+  type ScrollViewInstance,
+  type ViewInstance,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -23,9 +27,10 @@ import { API_URL } from '@/constants/config';
 import { AccountMenuButton, AppHeader } from '@/components/ui/AppHeader';
 import { BottomNav } from '@/components/ui/BottomNav';
 import { AppRefreshControl } from '@/components/ui/AppRefreshControl';
-import { AppGuideOverlay, GUIDE_STEP_COUNT, type GuideRect } from '@/components/ui/AppGuide';
+import { AppGuideOverlay, GUIDE_STEPS, GUIDE_TRANSITION_DURATION, type GuideRect, type GuideSpotlight } from '@/components/ui/AppGuide';
 import { usePullToRefresh } from '@/hooks/usePullToRefresh';
 import { RewardsScreen } from '@/screens/home/RewardsScreen';
+import { OrdersScreen } from '@/screens/orders/OrdersScreen';
 import type { MainNavigateOptions, MainScreen, MainTab } from '@/navigation/types';
 import { useIsFocused } from '@react-navigation/native';
 import { latestActiveOrder, orderProgress } from '@/lib/orderProgress';
@@ -39,13 +44,6 @@ import { OrderProgressTracker } from '@/components/orders/OrderProgressTracker';
  * Greeting, Service Request milestones, and the account's track-specific loyalty
  * summary are loaded from the authenticated session and NestJS API.
  */
-// App-guide step → the Home element it spotlights (null = full dim). Kept in sync
-// with the copy in `AppGuide.tsx` STEPS by index.
-const GUIDE_TARGETS = [null, 'rewards', 'active', 'reorder', 'quick', 'nav', 'help'] as const;
-
-/** Minimal instance shape we need off a ref, given the degraded RN types. */
-type Measurable = { measureInWindow: (cb: (x: number, y: number, w: number, h: number) => void) => void };
-
 type LoyaltyCatalogItem = { id: string; branch_id: string; name: string; points_cost: number };
 type HouseholdAccountRow = { branch_id: string; points_balance: number };
 type HouseholdHistoryRow = { id: string; type: string; points_delta: number; created_at: string };
@@ -224,7 +222,10 @@ export function HomeScreen({
   const activeTab = initialTab;
   const [guideOpen, setGuideOpen] = useState(showGuide);
   const [guideStep, setGuideStep] = useState(0);
-  const [guideRect, setGuideRect] = useState<GuideRect | null>(null);
+  const [guideRect, setGuideRect] = useState<GuideSpotlight | null>(null);
+  const [reduceGuideMotion, setReduceGuideMotion] = useState(true);
+  const [guideTransition, setGuideTransition] = useState<{ page: 'home' | 'history'; finished: boolean }>({ page: 'home', finished: true });
+  const [historyOpacity] = useState(() => new Animated.Value(0));
   const commercial = accountType === 'commercial';
   const commercialPurchaseTarget = 30;
   const commercialAccount = [...commercialAccounts].sort(
@@ -243,92 +244,165 @@ export function HomeScreen({
     typeof firstName === 'string' && firstName.trim() ? firstName.trim() : 'Customer';
   const heroHeight = insets.top + 290;
 
-  // Refs + content-relative offsets for the app-guide spotlight measurements.
-  const scrollRef = useRef<ScrollView>(null);
-  const homeRef = useRef<View>(null);
-  const guideRun = useRef(0);
-  const rewardsRef = useRef<View>(null);
-  const activeRef = useRef<View>(null);
-  const reorderRef = useRef<View>(null);
-  const quickRef = useRef<View>(null);
-  const helpRef = useRef<View>(null);
-  const layoutY = useRef<Record<string, number>>({});
-  const refFor = { rewards: rewardsRef, active: activeRef, reorder: reorderRef, quick: quickRef };
+  const scrollRef = useRef<ScrollViewInstance>(null);
+  const scrollOffset = useRef(0);
+  const updateScrolledSpotlight = useRef<((offset: number) => void) | null>(null);
+  const rewardsRef = useRef<ViewInstance>(null);
+  const activeOrdersRef = useRef<ViewInstance>(null);
+  const reorderRef = useRef<ViewInstance>(null);
+  const quickRef = useRef<ViewInstance>(null);
+  const navRef = useRef<ViewInstance>(null);
+  const helpRef = useRef<ViewInstance>(null);
+  const guideTarget = GUIDE_STEPS[guideStep].target;
+  const showingHistory = focused && guideOpen && guideTarget === 'active-orders';
+  const guidePage = showingHistory ? 'history' : 'home';
+  const animateGuidePage = focused && guideOpen && !reduceGuideMotion;
+  if (guideTransition.page !== guidePage) {
+    setGuideTransition({ page: guidePage, finished: !animateGuidePage });
+  }
+  const guidePageReady = !animateGuidePage || guideTransition.finished;
+  // The outgoing History screen stays mounted while its opacity falls to zero.
+  const keepHistoryMounted = showingHistory || !guidePageReady;
+  const guideSpotlight = (guideRect?.target === 'active-orders') === showingHistory ? guideRect : null;
+  const hasActiveOrder = activeOrder !== null;
 
   const openRewards = (sub: 'my' | 'all') => {
     onNavigate('rewards', { rewardsSection: sub });
   };
 
-  // The fixed nav uses its unchanged layout constants, relative to the measured
-  // Home bounds (including the raised Order action), rather than screen guesses.
-  const navRect = (x: number, y: number, width: number, height: number): GuideRect => ({ x: x + 12, y: y + height - insets.bottom - 6 - 64 - 21, width: width - 24, height: 85 });
-
-  const scrollTop = () => scrollRef.current?.scrollTo({ y: 0, animated: false });
-
-  // Publish only stable window bounds. A newer step invalidates every pending
-  // callback, including callbacks from a target that unmounts during the tour.
-  const applyRect = (ref: { current: unknown }, run: number) => {
-    let previous = '';
-    let stable = 0;
-    const measure = () => {
-      if (guideRun.current !== run) return;
-      (ref.current as Measurable | null)?.measureInWindow((x, y, width, height) => {
-        if (guideRun.current !== run || width <= 0 || height <= 0) return;
-        const signature = [x, y, width, height].map(Math.round).join(':');
-        stable = signature === previous ? stable + 1 : 0;
-        previous = signature;
-        if (stable >= 2) setGuideRect({ x, y, width, height });
-        else requestAnimationFrame(measure);
-      });
-    };
-    requestAnimationFrame(() => requestAnimationFrame(measure));
-  };
-
-  // Move each step's target into view, then spotlight it. Chrome steps (welcome,
-  // nav, help) scroll to the top; content steps scroll to the element. Runs on
-  // both Next and Back, so going back also scrolls onto the assigned spotlight.
-  const prepareStep = (i: number) => {
-    const run = ++guideRun.current;
-    setGuideRect(null);
-    const key = GUIDE_TARGETS[i];
-    if (!key) {
-      scrollTop();
-      setGuideRect(null);
-      return;
-    }
-    if (key === 'nav') {
-      scrollTop();
-      requestAnimationFrame(() => homeRef.current?.measureInWindow((x, y, width, height) => {
-        if (guideRun.current === run) setGuideRect(navRect(x, y, width, height));
-      }));
-      return;
-    }
-    if (key === 'help') {
-      scrollTop();
-      applyRect(helpRef, run);
-      return;
-    }
-    // Measure relative to the ScrollView itself: onLayout offsets have different
-    // parents (hero/content) and cannot be used as content offsets.
-    scrollTop();
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-      if (guideRun.current !== run) return;
-      (scrollRef.current as unknown as Measurable | null)?.measureInWindow((_x, scrollY) => {
-        refFor[key].current?.measureInWindow((_tx, targetY) => {
-          if (guideRun.current !== run) return;
-          scrollRef.current?.scrollTo({ y: Math.max(0, targetY - scrollY - insets.top - 26), animated: false });
-          applyRect(refFor[key], run);
-        });
-      });
-    }));
-  };
+  useEffect(() => {
+    let active = true;
+    void AccessibilityInfo.isReduceMotionEnabled().then(value => { if (active) setReduceGuideMotion(value); });
+    const subscription = AccessibilityInfo.addEventListener('reduceMotionChanged', setReduceGuideMotion);
+    return () => { active = false; subscription.remove(); };
+  }, []);
 
   useEffect(() => {
-    if (guideOpen && focused) prepareStep(guideStep);
-    return () => { guideRun.current += 1; };
-    // Remeasure after target mount, resizing, and every step transition.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [guideOpen, guideStep, focused, winW, winH, insets.top, insets.bottom, !!activeOrder]);
+    const fade = Animated.timing(historyOpacity, {
+      toValue: showingHistory ? 1 : 0,
+      duration: animateGuidePage ? GUIDE_TRANSITION_DURATION : 0,
+      easing: Easing.inOut(Easing.cubic),
+      useNativeDriver: true, isInteraction: false,
+    });
+    fade.start(({ finished }) => {
+      if (finished) {
+        setGuideTransition(current => current.page === guidePage && !current.finished
+          ? { page: guidePage, finished: true }
+          : current);
+      }
+    });
+    return () => fade.stop();
+  }, [animateGuidePage, guidePage, historyOpacity, showingHistory]);
+
+  useEffect(() => {
+    if (!guideOpen || !focused) return;
+    const target = guideTarget && {
+      rewards: rewardsRef,
+      'active-orders': activeOrdersRef,
+      reorder: reorderRef,
+      quick: quickRef,
+      nav: navRef,
+      help: helpRef,
+    }[guideTarget];
+    let cancelled = false;
+    let frame = 0;
+    let attempts = 0;
+    let previous: GuideRect | null = null;
+    let scrollFallback: ReturnType<typeof setTimeout> | undefined;
+    const scrollToTarget = guideTarget === 'reorder' || guideTarget === 'quick';
+    const isScrollTarget = scrollToTarget || guideTarget === 'rewards' || guideTarget === 'help';
+    if (!isScrollTarget && guideTarget !== 'active-orders') {
+      scrollRef.current?.scrollTo({ y: 0, animated: false });
+    }
+
+    function nextFrame() {
+      if (cancelled) return;
+      if (attempts < 24) frame = requestAnimationFrame(measure);
+      else setGuideRect(null);
+    }
+
+    function measure() {
+      attempts += 1;
+      if (!guideTarget || !target) {
+        setGuideRect(null);
+        return;
+      }
+      const view = target.current;
+      if (!view) {
+        nextFrame();
+        return;
+      }
+      if (isScrollTarget) {
+        const scroll = scrollRef.current;
+        const viewport = scroll?.getNativeScrollRef();
+        const content = scroll?.getInnerViewRef();
+        if (!scroll || !viewport || !content) {
+          nextFrame();
+          return;
+        }
+
+        viewport.measureInWindow((left, top, viewportWidth, viewportHeight) => {
+          if (cancelled) return;
+          if (viewportWidth <= 0 || viewportHeight <= 0) {
+            nextFrame();
+            return;
+          }
+          view.measureLayout(content, (x, y, width, height) => {
+            if (cancelled) return;
+            if (width <= 0 || height <= 0) {
+              nextFrame();
+              return;
+            }
+
+            // Window measurements of a scrolling child can lag behind the
+            // rendered scroll. Use its content bounds and the reported offset.
+            const destination = scrollToTarget ? Math.max(0, top + y - insets.top - 22) : 0;
+            let lastOffset: number | undefined;
+            const publish = (offset: number) => {
+              if (lastOffset === offset) return;
+              lastOffset = offset;
+              clearTimeout(scrollFallback);
+              setGuideRect({ x: left + x, y: top + y - offset, width, height, target: guideTarget });
+            };
+            updateScrolledSpotlight.current = publish;
+            if (Math.abs(scrollOffset.current - destination) <= 1) {
+              publish(scrollOffset.current);
+            } else {
+              // Keep the previous hole until the programmatic scroll reports
+              // its position. A clamped scroll may emit no event at all.
+              scrollFallback = setTimeout(() => publish(scrollOffset.current), 450);
+            }
+            // A rapid Back can arrive while the preceding step's scroll is queued.
+            scroll.scrollTo({ y: destination, animated: false });
+          }, nextFrame);
+        });
+        return;
+      }
+      view.measureInWindow((x, y, width, height) => {
+        if (cancelled) return;
+        if (width <= 0 || height <= 0) {
+          nextFrame();
+          return;
+        }
+        const bounds = { x, y, width, height };
+        if ((previous && previous.x === x && previous.y === y && previous.width === width && previous.height === height) || attempts === 24) {
+          setGuideRect({ ...bounds, target: guideTarget });
+          return;
+        }
+        previous = bounds;
+        nextFrame();
+      });
+    }
+
+    // Keep the last measured hole while the next screen or scroll position settles.
+    nextFrame();
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(frame);
+      clearTimeout(scrollFallback);
+      updateScrolledSpotlight.current = null;
+    };
+  }, [guideOpen, guideTarget, focused, winW, winH, insets.top, insets.bottom, hasActiveOrder]);
 
   const openGuide = () => {
     if (activeTab === 'rewards') {
@@ -337,27 +411,16 @@ export function HomeScreen({
     }
     setGuideStep(0);
     setGuideRect(null);
-    scrollRef.current?.scrollTo({ y: 0, animated: false });
     setGuideOpen(true);
   };
   const guideNext = () => {
-    if (guideStep >= GUIDE_STEP_COUNT - 1) return setGuideOpen(false);
-    const n = guideStep + 1;
-    setGuideRect(null);
-    setGuideStep(n);
+    if (guideStep >= GUIDE_STEPS.length - 1) setGuideOpen(false);
+    else setGuideStep(guideStep + 1);
   };
-  const guideBack = () => {
-    const p = Math.max(0, guideStep - 1);
-    setGuideRect(null);
-    setGuideStep(p);
-  };
-
-  const captureY = (key: string) => (e: LayoutChangeEvent) => {
-    layoutY.current[key] = e.nativeEvent.layout.y;
-  };
+  const guideBack = () => setGuideStep(Math.max(0, guideStep - 1));
 
   return (
-    <View ref={homeRef} collapsable={false} style={styles.flex}>
+    <View style={styles.flex}>
       {activeTab === 'rewards' ? (
         <>
           <AppHeader
@@ -386,7 +449,13 @@ export function HomeScreen({
           style={styles.sheet}
           showsVerticalScrollIndicator={false}
           removeClippedSubviews={false}
-          contentContainerStyle={styles.scrollContent}
+          contentContainerStyle={[styles.scrollContent, guideOpen && { paddingBottom: winH }]}
+          onScroll={event => {
+            const offset = event.nativeEvent.contentOffset.y;
+            scrollOffset.current = offset;
+            updateScrolledSpotlight.current?.(offset);
+          }}
+          scrollEventThrottle={16}
           refreshControl={<AppRefreshControl refreshing={refreshing} onRefresh={onRefresh} onPrimary />}
         >
           {/*
@@ -421,7 +490,7 @@ export function HomeScreen({
                 <Text style={styles.homeSub}>What can we do for you today?</Text>
               </View>
               <View style={styles.homeActions}>
-                <Pressable ref={helpRef} onPress={openGuide} hitSlop={8}>
+                <Pressable ref={helpRef} onPress={openGuide} hitSlop={8} accessibilityRole="button" accessibilityLabel="Open app guide">
                   <Feather name="help-circle" size={24} color="#fff" />
                 </Pressable>
                 <AccountMenuButton
@@ -434,7 +503,6 @@ export function HomeScreen({
             {/* The two loyalty tracks remain separate by design. */}
             <Pressable
               ref={rewardsRef}
-              onLayout={captureY('rewards')}
               style={styles.rewardTapArea}
               onPress={() => openRewards('my')}
             >
@@ -508,7 +576,7 @@ export function HomeScreen({
           <View style={styles.content}>
             {activeOrder && activeProgress ? (
               <>
-                <View ref={activeRef} collapsable={false} style={styles.section} onLayout={captureY('active')}>
+                <View style={styles.section}>
                   <Text style={styles.sectionTitle}>Active order</Text>
                   <Pressable
                     style={({ pressed }) => [styles.activeOrder, pressed && { opacity: 0.85 }]}
@@ -542,7 +610,7 @@ export function HomeScreen({
             <View
               ref={reorderRef}
               style={styles.orderAgainSection}
-              onLayout={captureY('reorder')}
+              collapsable={false}
             >
               <Text style={styles.sectionTitle}>Order again</Text>
               <Text style={styles.pricingNote}>Default prices shown. Your selected branch determines the final price.</Text>
@@ -583,7 +651,6 @@ export function HomeScreen({
             <Pressable
               ref={quickRef}
               style={styles.quickOrder}
-              onLayout={captureY('quick')}
               onPress={() => onNavigate('order-process')}
             >
               <View style={styles.quickIcon}>
@@ -599,16 +666,34 @@ export function HomeScreen({
       <BottomNav
         active={activeTab}
         onNavigate={onNavigate}
+        guideRef={navRef}
       />
 
-      <AppGuideOverlay
-        visible={focused && guideOpen}
-        step={guideStep}
-        rect={guideRect}
-        onNext={guideNext}
-        onBack={guideBack}
-        onClose={() => setGuideOpen(false)}
-      />
+      {keepHistoryMounted && (
+        <Animated.View
+          testID="app-guide-history"
+          style={[StyleSheet.absoluteFill, { opacity: reduceGuideMotion ? Number(showingHistory) : historyOpacity }]}
+          pointerEvents="none"
+          aria-hidden
+          accessibilityElementsHidden
+          importantForAccessibility="no-hide-descendants"
+        >
+          <OrdersScreen onNavigate={onNavigate} activeOrdersRef={activeOrdersRef} />
+        </Animated.View>
+      )}
+
+      {focused && (
+        <AppGuideOverlay
+          visible={guideOpen}
+          step={guideStep}
+          rect={guideSpotlight}
+          pageReady={guidePageReady}
+          reduceMotion={reduceGuideMotion}
+          onNext={guideNext}
+          onBack={guideBack}
+          onClose={() => setGuideOpen(false)}
+        />
+      )}
     </View>
   );
 }

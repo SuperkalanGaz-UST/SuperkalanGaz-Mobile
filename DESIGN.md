@@ -167,7 +167,8 @@ objects.
 - Tab icons tint **`primary` when active, `navInactive` (`#9DB2CE`) when inactive**.
 - Product/cylinder art are PNGs in `assets/images`, registered in `src/lib/assets.ts` and
   resolved by size via `cylinderFor('11 KG')` (`resizeMode="contain"`, sizes `2.7/5/11/22/50
-  KG`). Rewards, payment logos, promo and mascots are also keyed in `assets.ts`.
+  KG`). Rewards, payment logos, and promo art are also keyed in `assets.ts`. `Mascot.tsx`
+  renders individual poses from the supplied Superkalan Gaz SVG sheet.
 
 ---
 

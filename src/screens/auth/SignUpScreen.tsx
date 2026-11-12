@@ -142,7 +142,7 @@ export function SignUpScreen({
           />
 
           <PhoneField
-            label="Mobile number (optional)"
+            label="Mobile number"
             value={mobileNumber}
             onChangeText={setMobileNumber}
             error={errors.mobileNumber}

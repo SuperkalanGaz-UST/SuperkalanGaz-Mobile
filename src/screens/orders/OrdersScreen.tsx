@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { type Ref, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Image,
   Pressable,
@@ -6,6 +6,7 @@ import {
   StyleSheet,
   Text,
   View,
+  type ViewInstance,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import * as WebBrowser from 'expo-web-browser';
@@ -55,7 +56,10 @@ type PaymentResponse = {
 
 WebBrowser.maybeCompleteAuthSession();
 
-export function OrdersScreen({ onNavigate }: { onNavigate: (screen: MainScreen, opts?: MainNavigateOptions) => void }) {
+export function OrdersScreen({ onNavigate, activeOrdersRef }: {
+  onNavigate: (screen: MainScreen, opts?: MainNavigateOptions) => void;
+  activeOrdersRef?: Ref<ViewInstance>;
+}) {
   const { session } = useAuth();
   const customerId = session?.user.id ?? null;
   const [tab, setTab] = useState<'active' | 'past'>('active');
@@ -237,7 +241,14 @@ export function OrdersScreen({ onNavigate }: { onNavigate: (screen: MainScreen, 
         <View style={styles.tabsWrap}>
           <View style={{ flexDirection: 'row' }}>
             {(['active', 'past'] as const).map((t) => (
-              <Pressable key={t} style={styles.tabItem} onPress={() => setTab(t)}>
+              <Pressable
+                key={t}
+                ref={t === 'active' ? activeOrdersRef : undefined}
+                accessibilityRole="tab"
+                accessibilityState={{ selected: t === tab }}
+                style={styles.tabItem}
+                onPress={() => setTab(t)}
+              >
                 <Text style={[styles.tabText, { color: tab === t ? colors.primary : colors.muted }]}>
                   {t === 'active' ? `Active Orders (${activeOrders.length})` : 'Past Orders'}
                 </Text>

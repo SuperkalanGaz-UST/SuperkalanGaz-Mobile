@@ -74,8 +74,11 @@ function driverDashboard(assignment = null) {
   };
 }
 
-async function newContext(session, { signedOut = false, dashboard = driverDashboard() } = {}) {
-  const context = await browser.newContext({ viewport: { width: 414, height: 896 } });
+async function newContext(session, {
+  signedOut = false, dashboard = driverDashboard(), orders = [],
+  viewport = { width: 414, height: 896 }, reducedMotion = 'no-preference',
+} = {}) {
+  const context = await browser.newContext({ viewport, reducedMotion });
   if (!signedOut) await context.addInitScript(({ key, session }) => {
     if (!sessionStorage.getItem('routing-test-initialized')) {
       localStorage.setItem(key, JSON.stringify(session));
@@ -96,6 +99,7 @@ async function newContext(session, { signedOut = false, dashboard = driverDashbo
     if (url.pathname.startsWith('/api/')) {
       requests.push({ method: request.method(), path: url.pathname });
       if (url.pathname === '/api/delivery-rider/me') return route.fulfill({ json: dashboard });
+      if (url.pathname === '/api/service-requests/me') return route.fulfill({ json: { serviceRequests: orders } });
       if (url.pathname === '/api/delivery-rider-invitations/session/details') return route.fulfill({ json: {
         recipientName: 'Route Test', email: session.user.email, mobile: '+639171234567', branchName: 'Routing branch',
       } });
@@ -183,6 +187,170 @@ test('signup and password recovery have public routes without putting recovery p
     await page.reload();
     await page.getByPlaceholder('Email Address', { exact: true }).waitFor();
     assert.equal(requests.length, 0, 'Reloading an unfinished recovery must remain signed out');
+    assert.deepEqual(errors, []);
+  } finally { await context.close(); }
+});
+
+test('customer guide highlights Active Orders in History without requiring an order', { timeout: 15_000 }, async () => {
+  const { context, page, errors } = await newContext(sessionFor('customer'), {
+    viewport: { width: 393, height: 695 },
+  });
+  try {
+    await page.goto(`${baseUrl}/customer/home?showGuide=true`);
+    const next = page.getByRole('button', { name: 'NEXT', exact: true });
+    const back = page.getByRole('button', { name: 'Back', exact: true });
+    const spotlight = page.getByTestId('app-guide-spotlight');
+    const card = page.getByTestId('app-guide-card');
+    const mascot = card.locator('[data-testid^="mascot-"]');
+    await next.click();
+    await next.click();
+    await page.getByText('My Orders', { exact: true }).waitFor({ timeout: 3_000 });
+    await page.getByText('You have no active orders.', { exact: true }).waitFor();
+    const activeTab = page.getByText('Active Orders (0)', { exact: true });
+    await page.waitForFunction(tab => {
+      const hole = document.querySelector('[data-testid="app-guide-spotlight"]').getBoundingClientRect();
+      const label = tab.getBoundingClientRect();
+      return hole.left <= label.left && hole.right >= label.right && hole.top <= label.top && hole.bottom >= label.bottom && hole.width < 200;
+    }, await activeTab.elementHandle());
+    await next.click();
+    await page.waitForFunction(() => Number(document.querySelector('[data-testid="app-guide-spotlight"]').getAttribute('height')) > 150);
+    await card.getByText('Ordering Again?', { exact: true }).waitFor();
+    assert.equal(await mascot.count(), 1);
+    assert.ok(await mascot.locator('svg path').count() > 100);
+    const reorderHole = await spotlight.boundingBox();
+    assert.ok(reorderHole.y + reorderHole.height < (await mascot.boundingBox()).y);
+
+    await next.click();
+    await page.waitForFunction(() => {
+      const { y, height } = document.querySelector('[data-testid="app-guide-spotlight"]').getBoundingClientRect();
+      return y < 40 && height > 0 && height < 75;
+    });
+    await spotlight.evaluate(element => {
+      globalThis.guideFrames = [];
+      new MutationObserver(() => {
+        globalThis.guideFrames.push([Number(element.getAttribute('y')), Number(element.getAttribute('height'))]);
+      }).observe(element, { attributes: true });
+    });
+    await next.click();
+    await card.getByText('Navigate with Ease!', { exact: true }).waitFor();
+    await page.waitForFunction(() => Number(document.querySelector('[data-testid="app-guide-spotlight"]').getAttribute('y')) > 590);
+    const frames = await page.evaluate(() => globalThis.guideFrames);
+    assert.ok(frames.some(([y]) => y > 100 && y < 500), 'The spotlight passes through intermediate positions');
+    assert.ok(frames.every(([, height]) => height > 0), 'The spotlight stays open between measured targets');
+    assert.equal(await mascot.count(), 1);
+    assert.ok(await mascot.locator('svg path').count() > 100);
+    const navCard = await card.boundingBox();
+    assert.ok((await spotlight.boundingBox()).y > navCard.y + navCard.height);
+
+    await back.click();
+    await card.getByText('Quick Order', { exact: true }).waitFor();
+    await back.click();
+    await card.getByText('Ordering Again?', { exact: true }).waitFor();
+    await back.click();
+    await activeTab.waitFor();
+    await page.getByRole('button', { name: 'Close guide' }).click();
+    await card.waitFor({ state: 'hidden' });
+    await page.getByRole('button', { name: 'Open app guide' }).click();
+    await card.getByText('Hi! Welcome to Superkalan Gaz App', { exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Close guide' }).click();
+    await page.getByRole('button', { name: 'More', exact: true }).click();
+    await page.getByText('App Guide', { exact: true }).click();
+    await card.getByText('Hi! Welcome to Superkalan Gaz App', { exact: true }).waitFor();
+    assert.equal(await card.count(), 1);
+    await page.getByRole('button', { name: 'Close guide' }).click();
+    await card.waitFor({ state: 'hidden' });
+    await page.getByRole('button', { name: 'More', exact: true }).click();
+    await page.getByRole('button', { name: /Log Out Sign out of this device/ }).click();
+    const sadMascot = page.getByTestId('mascot-sad');
+    await sadMascot.waitFor();
+    assert.ok(await sadMascot.locator('svg path').count() > 100);
+    assert.deepEqual(errors, []);
+  } finally { await context.close(); }
+});
+
+test('Quick Order spotlight follows the row when scrolling finishes after measurement', { timeout: 15_000 }, async () => {
+  const { context, page } = await newContext(sessionFor('customer'), {
+    viewport: { width: 393, height: 852 },
+  });
+  try {
+    await page.goto(`${baseUrl}/customer/home?showGuide=true`);
+    const next = page.getByRole('button', { name: 'NEXT', exact: true });
+    const spotlight = page.getByTestId('app-guide-spotlight');
+    for (let step = 0; step < 3; step++) await next.click();
+    await page.getByText('Ordering Again?', { exact: true }).waitFor();
+    const row = page.getByText('Quick order', { exact: true }).locator('..');
+    await page.waitForFunction(element => {
+      const hole = document.querySelector('[data-testid="app-guide-spotlight"]').getBoundingClientRect();
+      return hole.height > 150 && hole.top < 35 && element.getBoundingClientRect().top > 200;
+    }, await row.elementHandle());
+
+    // Delay the real scroll command so layout reads can repeat the old bounds.
+    await row.evaluate(element => {
+      let scrollView = element.parentElement;
+      while (scrollView && !['auto', 'scroll'].includes(getComputedStyle(scrollView).overflowY)) {
+        scrollView = scrollView.parentElement;
+      }
+      if (!scrollView) throw new Error('Could not find the Home scroll view');
+      const scroll = scrollView.scroll.bind(scrollView);
+      scrollView.scroll = options => setTimeout(() => scroll(options), 180);
+    });
+
+    async function expectQuickOrderSpotlight() {
+      const target = await row.elementHandle();
+      await page.waitForFunction(element => element.getBoundingClientRect().top < 60, target);
+      try {
+        await page.waitForFunction(element => {
+          const bounds = element.getBoundingClientRect();
+          const hole = document.querySelector('[data-testid="app-guide-spotlight"]').getBoundingClientRect();
+          return Math.abs(hole.top - bounds.top + 6) < 2 && Math.abs(hole.bottom - bounds.bottom - 6) < 2;
+        }, target, { timeout: 2_500 });
+      } catch (error) {
+        throw new Error(`Quick Order row y=${(await row.boundingBox()).y}, spotlight y=${(await spotlight.boundingBox()).y}`, { cause: error });
+      }
+    }
+
+    await next.click();
+    await expectQuickOrderSpotlight();
+    assert.ok(await page.getByTestId('mascot-confident').locator('svg path').count() > 100);
+    await next.click();
+    assert.ok(await page.getByTestId('mascot-wink-and-point').locator('svg path').count() > 100);
+    await page.waitForFunction(element => element.getBoundingClientRect().top > 200, await row.elementHandle());
+    await page.getByRole('button', { name: 'Back', exact: true }).click();
+    await expectQuickOrderSpotlight();
+  } finally { await context.close(); }
+});
+
+test('customer guide uses the real active order list and honors reduced motion on a short viewport', { timeout: 15_000 }, async () => {
+  const { context, page, errors } = await newContext(sessionFor('customer'), {
+    viewport: { width: 320, height: 480 },
+    reducedMotion: 'reduce',
+    orders: [{ id: 'test-order', status: 'Pending', cylinder_size: '11kg', quantity: 1, requested_at: '2026-11-13T00:00:00Z', total_amount: 659, payment_method: 'Cash on Delivery' }],
+  });
+  try {
+    await page.goto(`${baseUrl}/customer/home?showGuide=true`);
+    const next = page.getByRole('button', { name: 'NEXT', exact: true });
+    await next.click();
+    await next.click();
+    await page.getByText('Active Orders (1)', { exact: true }).waitFor();
+    await page.getByText('Status: Pending', { exact: true }).waitFor();
+    const spotlight = page.getByTestId('app-guide-spotlight');
+    await page.waitForFunction(() => Number(document.querySelector('[data-testid="app-guide-spotlight"]').getAttribute('y')) > 140);
+    await spotlight.evaluate(element => {
+      globalThis.guideFrames = [];
+      new MutationObserver(() => globalThis.guideFrames.push(Number(element.getAttribute('y')))).observe(element, { attributes: true });
+    });
+    await next.click();
+    await page.waitForFunction(() => Number(document.querySelector('[data-testid="app-guide-spotlight"]').getAttribute('y')) < 40);
+    assert.ok((await page.evaluate(() => globalThis.guideFrames)).every(y => y < 40 || y > 140));
+    const card = page.getByTestId('app-guide-card');
+    const mascot = card.locator('[data-testid^="mascot-"]');
+    const hole = await spotlight.boundingBox();
+    assert.ok(hole.height > 0 && hole.y + hole.height < (await mascot.boundingBox()).y);
+    await next.click();
+    await next.click();
+    await next.click();
+    await page.getByRole('button', { name: 'DONE' }).click();
+    await card.waitFor({ state: 'hidden' });
     assert.deepEqual(errors, []);
   } finally { await context.close(); }
 });
