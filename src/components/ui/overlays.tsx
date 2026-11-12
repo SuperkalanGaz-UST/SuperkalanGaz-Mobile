@@ -4,6 +4,7 @@ import { colors } from '@/theme/colors';
 import { fonts } from '@/theme/fonts';
 import { radii } from '@/theme/metrics';
 import { images } from '@/lib/assets';
+import { Mascot } from './Mascot';
 
 /* ─────────────────────────────────────────────
    Log-out confirmation
@@ -22,7 +23,7 @@ export function LogoutConfirmModal({
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
       <View style={styles.centerBackdrop}>
         <View style={styles.confirmCard}>
-          <Image source={images.mascotSad} style={styles.confirmMascot} resizeMode="contain" />
+          <Mascot pose="sad" style={styles.confirmMascot} />
           <Pressable style={styles.closeBtn} onPress={onCancel} hitSlop={8}>
             <Feather name="x" size={22} color={colors.grayText} />
           </Pressable>
@@ -104,7 +105,7 @@ const styles = StyleSheet.create({
     width: 320,
     backgroundColor: '#fff',
     borderRadius: radii.card,
-    paddingTop: 70,
+    paddingTop: 94, // Leave 16 points below the mascot before the title.
     paddingBottom: 24,
     paddingHorizontal: 24,
     alignItems: 'center',

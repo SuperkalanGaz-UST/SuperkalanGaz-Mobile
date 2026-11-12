@@ -24,13 +24,8 @@ export const images = {
   gcash: require('../../assets/images/gcash.png'),
   maya: require('../../assets/images/maya.png'),
 
-  // Promo + mascots (app guide / feedback)
+  // Promo
   promo: require('../../assets/images/promo.png'),
-  mascotSad: require('../../assets/images/mascot-sad.png'),
-  mascotWave: require('../../assets/images/mascot-wave.png'),
-  mascotRewards: require('../../assets/images/mascot-rewards.png'),
-  mascotOrder: require('../../assets/images/mascot-order.png'),
-  mascotQuick: require('../../assets/images/mascot-quick.png'),
 } as const;
 
 /** Cylinder image for a size label such as "11 KG" / "2.7 KG". */

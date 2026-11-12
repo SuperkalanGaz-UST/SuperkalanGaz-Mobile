@@ -138,7 +138,7 @@ function isMapMessage(value: unknown): value is MapMessage {
  * while coordinates cross a small validated JSON bridge into React Native.
  */
 export function AddressMap({ center, pin, onPinChange }: AddressMapProps) {
-  const webViewRef = useRef<WebView>(null);
+  const webViewRef = useRef<WebView<unknown>>(null);
   const initialHtml = useRef(createMapHtml(center, pin));
   const [mapError, setMapError] = useState(false);
 
@@ -183,7 +183,7 @@ export function AddressMap({ center, pin, onPinChange }: AddressMapProps) {
   }
 
   return (
-    <WebView
+    <WebView<unknown>
       ref={webViewRef}
       style={styles.map}
       source={{ html: initialHtml.current, baseUrl: 'https://openfreemap.org' }}

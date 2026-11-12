@@ -1,4 +1,5 @@
-import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import type { Ref } from 'react';
+import { Image, Pressable, StyleSheet, Text, View, type ViewInstance } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors } from '@/theme/colors';
@@ -23,9 +24,11 @@ const TABS: { key: MainTab; label: string; icon: FeatherName; screen: MainScreen
 export function BottomNav({
   active,
   onNavigate,
+  guideRef,
 }: {
   active: MainTab;
   onNavigate: (screen: MainScreen, opts?: { tab?: MainTab }) => void;
+  guideRef?: Ref<ViewInstance>;
 }) {
   const insets = useSafeAreaInsets();
   const left = TABS.slice(0, 2);
@@ -52,7 +55,7 @@ export function BottomNav({
   };
 
   return (
-    <View style={[styles.wrap, { bottom: insets.bottom + 6 }]} pointerEvents="box-none">
+    <View ref={guideRef} collapsable={false} style={[styles.wrap, { bottom: insets.bottom + 6 }]} pointerEvents="box-none">
       <View style={styles.bar}>
         {left.map(renderTab)}
         <View style={styles.fabSlot} />
@@ -74,7 +77,7 @@ export function BottomNav({
 }
 
 const styles = StyleSheet.create({
-  wrap: { position: 'absolute', left: 12, right: 12, alignItems: 'center' },
+  wrap: { position: 'absolute', left: 12, right: 12, paddingTop: 21, alignItems: 'center' },
   bar: {
     width: '100%',
     height: 64,
@@ -92,7 +95,7 @@ const styles = StyleSheet.create({
   fabAction: {
     position: 'absolute',
     alignSelf: 'center',
-    top: -21,
+    top: 0,
     width: 58,
     alignItems: 'center',
   },

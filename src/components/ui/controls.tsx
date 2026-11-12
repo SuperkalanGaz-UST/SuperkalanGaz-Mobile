@@ -5,6 +5,7 @@ import {
   Text,
   TextInput,
   View,
+  type TextInputInstance,
   type TextInputProps,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
@@ -191,9 +192,7 @@ export function OtpInput({
   value: string[];
   onChange: (v: string[]) => void;
 }) {
-  // Minimal focusable shape so imperative focus stays typed regardless of the
-  // installed RN type variant.
-  const refs = useRef<Array<{ focus: () => void } | null>>([]);
+  const refs = useRef<(TextInputInstance | null)[]>([]);
 
   const handleChange = (idx: number, ch: string) => {
     const digit = ch.replace(/\D/g, '').slice(-1);
@@ -212,8 +211,8 @@ export function OtpInput({
       {Array.from({ length: 6 }).map((_, i) => (
         <TextInput
           key={i}
-          ref={(el: TextInput | null) => {
-            refs.current[i] = el as unknown as { focus: () => void } | null;
+          ref={(el) => {
+            refs.current[i] = el;
           }}
           value={value[i] ?? ''}
           onChangeText={(t: string) => handleChange(i, t)}

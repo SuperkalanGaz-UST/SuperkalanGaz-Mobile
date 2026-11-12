@@ -38,6 +38,9 @@ references before relying on a claim. This repository's rules and the workspace
 truth for behavior. The shared docs are references, not authorization to implement
 deferred work.
 
+**User guides.** Before creating or editing an in-app user guide, read the workspace
+[in-app user guide playbook](../docs/product/in-app-user-guides.md).
+
 ---
 
 ## 3. Golden Rules (read first) `[all]`

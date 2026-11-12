@@ -1,209 +1,228 @@
-import { type ComponentType, useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   Animated,
   Easing,
-  Image,
-  type LayoutChangeEvent,
   Modal,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   useWindowDimensions,
   View,
+  type ViewInstance,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import Svg, { Defs, Mask, Rect } from 'react-native-svg';
 import { colors } from '@/theme/colors';
 import { fonts } from '@/theme/fonts';
-import { images } from '@/lib/assets';
+import { Mascot, type MascotPose } from './Mascot';
 
-/**
- * First-run app tour (Figma "AppGuide" spotlight), controlled by the host screen.
- *
- * The host (Home) measures the real element for each step and passes its window
- * `rect`; the overlay dims everything except a padded box around that rect, so the
- * spotlight always matches the actual UI (never a guessed offset) and hugs the
- * element with a side margin instead of spanning edge-to-edge. `rect = null` =
- * full dim (welcome / "need help" steps). Between steps the box + card morph.
- */
 export type GuideRect = { x: number; y: number; width: number; height: number };
+type GuideTarget = 'rewards' | 'active-orders' | 'reorder' | 'quick' | 'nav' | 'help';
+export type GuideSpotlight = GuideRect & { target: GuideTarget };
 
-const GUIDE_DARK = 'rgba(0,0,0,0.62)';
-const PAD = 10; // padding around the highlighted element
-const CARD_BOTTOM_GAP = 100; // space kept above the floating nav for a bottom-anchored card
-
-// The installed RN/React type combo degrades `Animated.View`'s props to `{}` (the
-// same root as the environmental "View is not a valid JSX component" errors), so
-// its `style` prop won't typecheck. Alias to a permissive component — runtime is
-// unaffected; Metro/Babel strip types.
-const AView = Animated.View as unknown as ComponentType<any>;
-
-type Anchor = 'top' | 'bottom';
-type Step = { img: number; title: string; body: string; anchor: Anchor };
-
-const STEPS: Step[] = [
-  { img: images.mascotWave, title: 'Hi! Welcome to Superkalan Gaz App', body: "I'm here to guide you in this app, let me show you some cool things here that will help you.", anchor: 'bottom' },
-  { img: images.mascotRewards, title: 'Loyalty Rewards', body: 'Track your current loyalty progress and open the rewards available for your account type.', anchor: 'bottom' },
-  { img: images.mascotRewards, title: 'Active Orders', body: 'Here you can see your active orders as of the moment. You can view it anytime.', anchor: 'bottom' },
-  { img: images.mascotOrder, title: 'Ordering Again?', body: "Ordering again made easier! Just one click away and you're all set for another order.", anchor: 'bottom' },
-  { img: images.mascotQuick, title: 'Quick Order', body: 'Quick orders can be viewed also here! You can choose from a wide variety of high-quality gas tanks.', anchor: 'bottom' },
-  { img: images.mascotOrder, title: 'Navigate with Ease!', body: 'Use the bar for Home, Rewards, Orders, and More. Your profile is always available from the avatar above.', anchor: 'top' },
-  { img: images.mascotWave, title: 'Need Help?', body: "Just click 'Guide' to see this app guide again if ever you feel lost.", anchor: 'top' },
+type Step = { pose: MascotPose; title: string; body: string; target: GuideTarget | null };
+export const GUIDE_STEPS: readonly Step[] = [
+  { pose: 'thumbs-up', title: 'Hi! Welcome to Superkalan Gaz App', body: "I'm here to guide you in this app, let me show you some cool things here that will help you.", target: null },
+  { pose: 'celebrating', title: 'Loyalty Rewards', body: 'Track your current loyalty progress and open the rewards available for your account type.', target: 'rewards' },
+  { pose: 'wink-and-point', title: 'Active Orders', body: 'Open History and choose Active Orders to check the status of your current deliveries.', target: 'active-orders' },
+  { pose: 'thumbs-up-smile', title: 'Ordering Again?', body: 'Choose a cylinder from Order again to start a new order.', target: 'reorder' },
+  { pose: 'confident', title: 'Quick Order', body: 'Quick orders can be viewed also here! You can choose from a wide variety of high-quality gas tanks.', target: 'quick' },
+  { pose: 'wink-and-point', title: 'Navigate with Ease!', body: 'Use the bar to open Home, Rewards, Order, History, or More.', target: 'nav' },
+  { pose: 'thinking', title: 'Need Help?', body: 'Tap the question mark on Home or open More → App Guide to revisit this tour.', target: 'help' },
 ];
 
-export const GUIDE_STEP_COUNT = STEPS.length;
+const PAD = 6;
+const GAP = 16;
+const MASCOT_RISE = 100;
+export const GUIDE_TRANSITION_DURATION = 310;
+const CONTENT_TRANSITION_DURATION = 180;
+const AnimatedRect = Animated.createAnimatedComponent(Rect);
 
-export function AppGuideOverlay({
-  visible,
-  step,
-  rect,
-  onNext,
-  onBack,
-  onClose,
-}: {
+export function AppGuideOverlay({ visible, step, rect, pageReady, reduceMotion, onNext, onBack, onClose }: {
   visible: boolean;
   step: number;
-  rect: GuideRect | null;
+  rect: GuideSpotlight | null;
+  pageReady: boolean;
+  reduceMotion: boolean;
   onNext: () => void;
   onBack: () => void;
   onClose: () => void;
 }) {
-  const { width, height } = useWindowDimensions();
+  const window = useWindowDimensions();
   const insets = useSafeAreaInsets();
-  const [cardH, setCardH] = useState(200);
-  const overlayRef = useRef<View>(null);
-  const [viewport, setViewport] = useState({ x: 0, y: 0, height });
-  const data = STEPS[step] ?? STEPS[0];
-  const isLast = step >= STEPS.length - 1;
+  const overlayRef = useRef<ViewInstance>(null);
+  const [viewport, setViewport] = useState<GuideRect | null>(null);
+  const [cardHeight, setCardHeight] = useState(190);
+  const [content, setContent] = useState<{ step: number; visible: boolean; previous: number | null }>({ step, visible, previous: null });
+  const [contentProgress] = useState(() => new Animated.Value(1));
+  const revealNewPage = useRef(false);
+  const [spotlight] = useState(() => ({
+    x: new Animated.Value(0), y: new Animated.Value(0),
+    width: new Animated.Value(0), height: new Animated.Value(0), opacity: new Animated.Value(0),
+  }));
+  if (content.step !== step || content.visible !== visible) {
+    setContent({ step, visible, previous: content.visible && visible && !reduceMotion ? content.step : null });
+  }
+  const data = GUIDE_STEPS[step] ?? GUIDE_STEPS[0];
+  const previous = visible && !reduceMotion && content.previous !== null ? GUIDE_STEPS[content.previous] : null;
+  const outgoingOpacity = contentProgress.interpolate({ inputRange: [0, 1], outputRange: [1, 0] });
+  const { width, height, x, y } = viewport ?? { width: window.width, height: window.height, x: 0, y: 0 };
+  const safeTop = Math.max(0, insets.top - y);
+  const safeBottom = Math.min(height, window.height - insets.bottom - y);
+  const left = rect ? Math.max(2, rect.x - x - PAD) : width / 2;
+  const top = rect ? Math.max(safeTop + 2, rect.y - y - PAD) : height / 2;
+  const right = rect ? Math.min(width - 2, rect.x - x + rect.width + PAD) : left;
+  const bottom = rect ? Math.min(safeBottom, height - 2, rect.y - y + rect.height + PAD) : top;
 
-  const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
+  const minCardY = safeTop + GAP + MASCOT_RISE;
+  const maxCardY = safeBottom - GAP - cardHeight;
+  const defaultCardY = safeBottom - 100 - cardHeight;
+  const cardY = Math.max(minCardY, Math.min(maxCardY, rect?.target === 'nav'
+    ? Math.min(defaultCardY, top - GAP - cardHeight)
+    : Math.max(defaultCardY, rect ? bottom + GAP + MASCOT_RISE : minCardY)));
+  // Reserve room for the whole card and its mascot. On short screens the hole
+  // may show only the leading part of a tall target, keeping the controls clear.
+  const holeTop = rect?.target === 'nav' ? Math.max(top, cardY + cardHeight + GAP) : top;
+  const holeBottom = rect?.target === 'nav' ? bottom : Math.min(bottom, cardY - MASCOT_RISE - GAP);
+  const holeWidth = Math.max(0, right - left);
+  const holeHeight = Math.max(0, holeBottom - holeTop);
+  const hasHole = rect !== null && holeWidth > 0 && holeHeight > 0;
+  const [cardTop] = useState(() => new Animated.Value(cardY));
+  const copyHeight = Math.min(height < 550 ? 80 : 112, Math.max(48, safeBottom - minCardY - 138));
+  const duration = visible && !reduceMotion ? GUIDE_TRANSITION_DURATION : 0;
 
-  // Where the spotlight box + card should sit for the current step.
-  const targets = () => {
-    const top = Math.max(16, insets.top - viewport.y + 16);
-    const bottom = viewport.height - insets.bottom - 16;
-    if (!rect) {
-      const cardY = clamp(viewport.height - insets.bottom - CARD_BOTTOM_GAP - cardH, top + 100, bottom - cardH);
-      // Collapse the box so the padded panels meet exactly (no leftover hole) →
-      // a true full dim. `-PAD*2` cancels the PAD added back into the box edges.
-      return { sx: width / 2, sy: height / 2, sw: -PAD * 2, sh: -PAD * 2, ring: 0, cardY };
-    }
-    // Native window measurements and Modal-local coordinates can have different
-    // origins, particularly around the status bar. Convert once, without adding
-    // the safe-area inset a second time.
-    const x = rect.x - viewport.x;
-    const y = rect.y - viewport.y;
-    const below = y + rect.height + PAD + 16 + 100;
-    const roomBelow = below + cardH <= bottom;
-    const rawCardY = roomBelow && step !== 5 ? below : y - PAD - 16 - cardH;
-    const cardY = clamp(rawCardY, top + 100, bottom - cardH);
-    return { sx: x, sy: y, sw: rect.width, sh: rect.height, ring: 1, cardY };
-  };
-
-  const t0 = targets();
-  const sx = useRef(new Animated.Value(t0.sx)).current;
-  const sy = useRef(new Animated.Value(t0.sy)).current;
-  const sw = useRef(new Animated.Value(t0.sw)).current;
-  const sh = useRef(new Animated.Value(t0.sh)).current;
-  const ring = useRef(new Animated.Value(t0.ring)).current;
-  const cardY = useRef(new Animated.Value(t0.cardY)).current;
-  const opacity = useRef(new Animated.Value(0)).current; // card fly-in opacity
-  const fly = useRef(new Animated.Value(0)).current; // card fly-in translateY
-  const prevSig = useRef('');
-
-  const sig = () => `${step}:${rect ? `${Math.round(rect.x)},${Math.round(rect.y)},${Math.round(rect.width)},${Math.round(rect.height)}` : 'null'}`;
-
-  // Fly the card in ONCE whenever the guide (re)opens.
-  useEffect(() => {
-    if (!visible) {
-      prevSig.current = '';
+  useLayoutEffect(() => {
+    if (!previous) {
+      contentProgress.setValue(1);
       return;
     }
-    const t = targets();
-    sx.setValue(t.sx); sy.setValue(t.sy); sw.setValue(t.sw); sh.setValue(t.sh);
-    ring.setValue(t.ring); cardY.setValue(t.cardY);
-    prevSig.current = sig();
-    opacity.setValue(0);
-    fly.setValue(30);
-    Animated.parallel([
-      Animated.timing(opacity, { toValue: 1, duration: 320, easing: Easing.out(Easing.quad), useNativeDriver: false }),
-      Animated.timing(fly, { toValue: 0, duration: 420, easing: Easing.out(Easing.cubic), useNativeDriver: false }),
-    ]).start();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible]);
+    contentProgress.setValue(0);
+    const fade = Animated.timing(contentProgress, {
+      toValue: 1, duration: CONTENT_TRANSITION_DURATION, easing: Easing.inOut(Easing.cubic),
+      useNativeDriver: true, isInteraction: false,
+    });
+    fade.start(({ finished }) => {
+      if (finished) setContent(current => current.step === step ? { ...current, previous: null } : current);
+    });
+    return () => fade.stop();
+  }, [contentProgress, previous, step]);
 
-  // Morph the spotlight + card on a real step/rect change; snap on a size-only
-  // change (measured card height / rotation) so it never jitters.
   useEffect(() => {
-    if (!visible) return;
-    const t = targets();
-    const s = sig();
-    if (prevSig.current === s) {
-      sx.setValue(t.sx); sy.setValue(t.sy); sw.setValue(t.sw); sh.setValue(t.sh);
-      ring.setValue(t.ring);
-      cardY.setValue(t.cardY);
-      return;
-    }
-    prevSig.current = s;
-    // Never animate through an unrelated target or leave the previous hole open
-    // while Home is scrolling and measuring the next step.
-    sx.setValue(t.sx); sy.setValue(t.sy); sw.setValue(t.sw); sh.setValue(t.sh);
-    ring.setValue(t.ring); cardY.setValue(t.cardY);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step, rect, cardH, width, height, visible, viewport, insets.top, insets.bottom]);
+    if (!pageReady && duration > 0) return;
+    const move = Animated.timing(cardTop, {
+      toValue: cardY, duration, easing: Easing.inOut(Easing.cubic), useNativeDriver: false, isInteraction: false,
+    });
+    move.start();
+    return () => move.stop();
+  }, [cardTop, cardY, duration, pageReady]);
 
-  // Derived spotlight-box edges.
-  const boxLeft = Animated.subtract(sx, PAD);
-  const boxTop = Animated.subtract(sy, PAD);
-  const boxW = Animated.add(sw, PAD * 2);
-  const boxH = Animated.add(sh, PAD * 2);
-  const boxRight = Animated.add(sx, Animated.add(sw, PAD));
-  const boxBottom = Animated.add(sy, Animated.add(sh, PAD));
+  useEffect(() => {
+    const timing = (value: Animated.Value, toValue: number, ms = duration) => Animated.timing(value, {
+      toValue, duration: ms, easing: Easing.inOut(Easing.cubic), useNativeDriver: false, isInteraction: false,
+    });
+    if (!pageReady && duration > 0) {
+      revealNewPage.current = true;
+      const hide = timing(spotlight.opacity, 0, duration / 2);
+      hide.start();
+      return () => hide.stop();
+    }
+
+    if (revealNewPage.current && duration > 0) {
+      if (!hasHole) return;
+      // The old cutout is hidden while its geometry moves to the new page.
+      spotlight.x.setValue(left);
+      spotlight.y.setValue(holeTop);
+      spotlight.width.setValue(holeWidth);
+      spotlight.height.setValue(holeHeight);
+      revealNewPage.current = false;
+      const reveal = timing(spotlight.opacity, 1, duration / 2);
+      reveal.start();
+      return () => reveal.stop();
+    }
+
+    revealNewPage.current = false;
+    const animation = Animated.parallel([
+      timing(spotlight.x, hasHole ? left : width / 2),
+      timing(spotlight.y, hasHole ? holeTop : height / 2),
+      timing(spotlight.width, hasHole ? holeWidth : 0),
+      timing(spotlight.height, hasHole ? holeHeight : 0),
+      timing(spotlight.opacity, hasHole ? 1 : 0),
+    ]);
+    animation.start();
+    return () => animation.stop();
+  }, [duration, hasHole, height, holeHeight, holeTop, holeWidth, left, pageReady, spotlight, width]);
 
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+    <Modal visible={visible} transparent statusBarTranslucent navigationBarTranslucent animationType={reduceMotion ? 'none' : 'fade'} onRequestClose={onClose}>
       <View ref={overlayRef} style={styles.root} onLayout={() => {
-        overlayRef.current?.measureInWindow((x, y, _width, measuredHeight) => {
-          setViewport({ x, y, height: measuredHeight });
+        overlayRef.current?.measureInWindow((x, y, width, height) => {
+          if (width > 0 && height > 0) setViewport({ x, y, width, height });
         });
       }}>
-        {/* Four dark panels around the clear box */}
-        <AView style={[styles.panel, { top: 0, left: 0, right: 0, height: boxTop }]} />
-        <AView style={[styles.panel, { left: 0, right: 0, bottom: 0, top: boxBottom }]} />
-        <AView style={[styles.panel, { top: boxTop, height: boxH, left: 0, width: boxLeft }]} />
-        <AView style={[styles.panel, { top: boxTop, height: boxH, left: boxRight, right: 0 }]} />
-        {/* Highlight ring */}
-        <AView style={[styles.ring, { top: boxTop, left: boxLeft, width: boxW, height: boxH, opacity: ring }]} />
+        <Svg width="100%" height="100%" pointerEvents="none" style={StyleSheet.absoluteFill}>
+          <Defs>
+            <Mask id="app-guide-cutout" x="0" y="0" width="100%" height="100%" maskUnits="userSpaceOnUse">
+              <Rect width="100%" height="100%" fill="white" />
+              <AnimatedRect x={spotlight.x} y={spotlight.y} width={spotlight.width} height={spotlight.height} rx={12} fill="black" opacity={spotlight.opacity} />
+            </Mask>
+          </Defs>
+          <Rect width="100%" height="100%" fill="rgba(0,0,0,0.62)" mask="url(#app-guide-cutout)" />
+          <AnimatedRect testID="app-guide-spotlight" x={spotlight.x} y={spotlight.y} width={spotlight.width} height={spotlight.height} rx={12} fill="none" stroke="white" strokeWidth={2} opacity={spotlight.opacity} />
+        </Svg>
 
-        {/* Card */}
-        <AView style={[styles.cardWrap, { top: cardY, opacity, transform: [{ translateY: fly }] }]}>
-          <Image source={data.img} style={styles.mascot} resizeMode="contain" />
-          <View style={styles.card} onLayout={(e: LayoutChangeEvent) => setCardH(e.nativeEvent.layout.height)}>
-            <Pressable style={styles.close} onPress={onClose} hitSlop={8}>
+        <Animated.View testID="app-guide-card" accessibilityViewIsModal style={[styles.cardWrap, { top: cardTop }]}>
+          {previous && previous.pose !== data.pose && (
+            <Animated.View pointerEvents="none" aria-hidden accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={[styles.mascot, { opacity: outgoingOpacity }]}>
+              <Mascot pose={previous.pose} style={styles.mascotImage} />
+            </Animated.View>
+          )}
+          <Animated.View pointerEvents="none" style={[styles.mascot, { opacity: previous?.pose === data.pose ? 1 : contentProgress }]}>
+            <Mascot pose={data.pose} style={styles.mascotImage} />
+          </Animated.View>
+          <View style={styles.card} onLayout={event => setCardHeight(event.nativeEvent.layout.height)}>
+            <Pressable accessibilityRole="button" accessibilityLabel="Close guide" style={styles.close} onPress={onClose} hitSlop={8}>
               <Feather name="x" size={20} color={colors.grayText} />
             </Pressable>
-            <View style={styles.dots}>
-              {STEPS.map((_, i) => (
-                <View key={i} style={[styles.dot, i === step && styles.dotActive]} />
+            <View style={styles.dots} accessible accessibilityLabel={`Step ${step + 1} of ${GUIDE_STEPS.length}`}>
+              {GUIDE_STEPS.map(({ title }, i) => (
+                <View key={title} style={[styles.dot, i === step && styles.dotActive]} />
               ))}
             </View>
-            <Text style={styles.title}>{data.title}</Text>
-            <Text style={styles.body}>{data.body}</Text>
+            <View style={{ height: copyHeight }}>
+              {(previous ? [previous, data] : [data]).map(layer => {
+                const outgoing = layer !== data;
+                return (
+                  <Animated.View
+                    key={layer.title}
+                    style={[StyleSheet.absoluteFill, { opacity: outgoing ? outgoingOpacity : contentProgress }]}
+                    pointerEvents={outgoing ? 'none' : 'auto'}
+                    aria-hidden={outgoing}
+                    accessibilityElementsHidden={outgoing}
+                    importantForAccessibility={outgoing ? 'no-hide-descendants' : 'auto'}
+                  >
+                    <ScrollView>
+                      <Text accessibilityRole="header" accessibilityLiveRegion={outgoing ? 'none' : 'polite'} style={styles.title}>{layer.title}</Text>
+                      <Text style={styles.body}>{layer.body}</Text>
+                    </ScrollView>
+                  </Animated.View>
+                );
+              })}
+            </View>
             <View style={styles.actions}>
               {step > 0 ? (
-                <Pressable style={styles.back} onPress={onBack}>
+                <Pressable accessibilityRole="button" accessibilityLabel="Back" style={styles.back} onPress={onBack}>
                   <Feather name="chevron-left" size={16} color={colors.label} />
                   <Text style={styles.backText}>BACK</Text>
                 </Pressable>
-              ) : (
-                <View />
-              )}
-              <Pressable style={styles.next} onPress={onNext}>
-                <Text style={styles.nextText}>{isLast ? 'DONE' : 'NEXT'}</Text>
+              ) : <View />}
+              <Pressable accessibilityRole="button" style={styles.next} onPress={onNext}>
+                <Text style={styles.nextText}>{step === GUIDE_STEPS.length - 1 ? 'DONE' : 'NEXT'}</Text>
               </Pressable>
             </View>
           </View>
-        </AView>
+        </Animated.View>
       </View>
     </Modal>
   );
@@ -211,18 +230,17 @@ export function AppGuideOverlay({
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
-  panel: { position: 'absolute', backgroundColor: GUIDE_DARK },
-  ring: { position: 'absolute', borderWidth: 2, borderColor: 'rgba(255,255,255,0.9)', borderRadius: 12 },
   cardWrap: { position: 'absolute', left: 16, right: 16 },
-  mascot: { position: 'absolute', top: -100, alignSelf: 'center', width: 110, height: 120, zIndex: 1 },
+  mascot: { position: 'absolute', top: -MASCOT_RISE, alignSelf: 'center', width: 110, height: 120, zIndex: 1 },
+  mascotImage: { width: '100%', height: '100%' },
   card: { backgroundColor: '#fff', borderRadius: 12, paddingHorizontal: 20, paddingVertical: 20 },
   close: { position: 'absolute', top: 12, right: 16, zIndex: 2 },
   dots: { flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 16, marginTop: 4 },
   dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#d9d9d9' },
   dotActive: { width: 28, backgroundColor: colors.primary },
   title: { fontFamily: fonts.bold, fontSize: 17, color: colors.label, marginBottom: 8 },
-  body: { fontFamily: fonts.regular, fontSize: 13, color: colors.grayText, marginBottom: 20, lineHeight: 20 },
-  actions: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  body: { fontFamily: fonts.regular, fontSize: 13, color: colors.grayText, lineHeight: 20 },
+  actions: { marginTop: 20, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   back: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   backText: { fontFamily: fonts.medium, fontSize: 13, color: colors.label },
   next: { backgroundColor: colors.primary, borderRadius: 8, paddingHorizontal: 24, paddingVertical: 8 },
