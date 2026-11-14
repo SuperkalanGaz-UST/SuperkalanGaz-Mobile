@@ -9,7 +9,7 @@ import { fonts } from '@/theme/fonts';
 import { cardShadow, radii } from '@/theme/metrics';
 import { cylinderFor, images } from '@/lib/assets';
 import { PrimaryButton } from '@/components/ui/controls';
-import { Toast } from '@/components/ui/overlays';
+import { BottomSheetModal, Toast } from '@/components/ui/overlays';
 import { CylinderSize, formatPeso, useBranchPricing } from '@/contexts/PricingContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiErrorMessage, apiFetch } from '@/lib/api';
@@ -17,6 +17,7 @@ import { normalizePhMobile } from '@/lib/phMobile';
 import { PH_ADDRESS_AREAS, PH_LOCATION_DATA_VERSION, type PhAddressArea } from '@/lib/phLocations';
 import type { MainScreen, MainTab } from '@/navigation/types';
 import { AddressMap } from '@/components/maps/AddressMap';
+import { useVisibleViewport } from '@/hooks/useVisibleViewport';
 import {
   createCustomerAddress,
   listCustomerAddresses,
@@ -349,6 +350,7 @@ export function OrderProcessScreen({ onNavigate, initialOrderId, onOrderPlaced }
   const [addressPin, setAddressPin] = useState<Coordinate | null>(null);
   const [addressMapCenter, setAddressMapCenter] = useState<Coordinate>(DEFAULT_ADDRESS_CENTER);
   const [mapFullscreen, setMapFullscreen] = useState(false);
+  const mapViewport = useVisibleViewport(mapFullscreen);
   const [mapGeocodeLoading, setMapGeocodeLoading] = useState(false);
   const [locationLoading, setLocationLoading] = useState(false);
   const [locationMessage, setLocationMessage] = useState('Move the pin or tap the map to adjust it.');
@@ -1171,7 +1173,7 @@ export function OrderProcessScreen({ onNavigate, initialOrderId, onOrderPlaced }
               key={branch.id}
               accessibilityRole="radio"
               accessibilityLabel={`${branch.name}, ${branch.distance}, ${branch.hours}`}
-              accessibilityState={{ checked: selected }}
+              aria-checked={selected}
               onPress={() => setSelectedBranch(branch)}
               style={({ pressed }) => [
                 styles.branchCard,
@@ -1219,9 +1221,10 @@ export function OrderProcessScreen({ onNavigate, initialOrderId, onOrderPlaced }
         })()}
       </ScrollView>
 
-      <View style={[styles.locationFooter, { paddingBottom: Math.max(insets.bottom, 16) }]}>
+      <View style={[styles.locationFooter, { paddingBottom: Math.max(insets.bottom, 10) }]}>
         <PrimaryButton
           label="Choose cylinders"
+          style={styles.locationContinueButton}
           disabled={!canContinueFromLocation}
           onPress={() => setStep('select')}
         />
@@ -1712,18 +1715,21 @@ export function OrderProcessScreen({ onNavigate, initialOrderId, onOrderPlaced }
       <Modal
         visible={modal === 'editAddress'}
         transparent
+        statusBarTranslucent
+        navigationBarTranslucent
         animationType="fade"
         onRequestClose={() => (mapFullscreen ? setMapFullscreen(false) : setModal('none'))}
       >
         <View style={mapFullscreen ? styles.addressMapFullscreenBackdrop : styles.addressModalBackdrop}>
           {mapFullscreen ? (
-            <View style={styles.addressMapFullscreen}>
-              <AddressMap
-                center={addressMapCenter}
-                pin={addressPin ?? addressMapCenter}
-                onPinChange={updateAddressPin}
-              />
-              <View style={styles.addressMapTopBar}>
+            <View style={[styles.addressMapFullscreen, mapViewport && {
+              position: 'absolute',
+              top: mapViewport.y,
+              left: mapViewport.x,
+              width: mapViewport.width,
+              height: mapViewport.height,
+            }]}>
+              <View style={[styles.addressMapTopBar, { paddingTop: insets.top + 4 }]}>
                 <Pressable
                   accessibilityRole="button"
                   accessibilityLabel="Back to address form"
@@ -1742,12 +1748,19 @@ export function OrderProcessScreen({ onNavigate, initialOrderId, onOrderPlaced }
                   <Feather name="x" size={20} color={colors.heading} />
                 </Pressable>
               </View>
-              <View style={styles.addressMapBottomCard}>
+              <View style={styles.addressMapCanvas}>
+                <AddressMap
+                  center={addressMapCenter}
+                  pin={addressPin ?? addressMapCenter}
+                  onPinChange={updateAddressPin}
+                />
+              </View>
+              <View style={[styles.addressMapBottomCard, { paddingBottom: Math.max(insets.bottom, 10) }]}>
                 <Text style={styles.addressMapBottomTitle}>Move the pin to your delivery point</Text>
                 <Text style={styles.addressMapBottomText}>
                   {mapGeocodeLoading ? 'Looking up the address…' : locationMessage}
                 </Text>
-                <Text style={styles.addressMapAttribution}>© OpenStreetMap contributors • Nominatim</Text>
+                <Text style={styles.addressMapAttribution}>Address lookup by Nominatim</Text>
                 <PrimaryButton
                   label={mapGeocodeLoading ? 'Looking up address…' : 'Use this location'}
                   disabled={!addressPin || mapGeocodeLoading}
@@ -2063,32 +2076,52 @@ export function OrderProcessScreen({ onNavigate, initialOrderId, onOrderPlaced }
       </Modal>
 
       {/* Payment Method */}
-      <Modal visible={modal === 'payment'} transparent animationType="slide" onRequestClose={() => setModal('none')}>
-        <Pressable style={styles.sheetBackdrop} onPress={() => setModal('none')} />
-        <View style={styles.bottomSheet}>
+      <BottomSheetModal visible={modal === 'payment'} onClose={() => setModal('none')} testID="payment-sheet" style={styles.bottomSheet}>
+        <ScrollView bounces={false} style={styles.paymentSheetScroll} contentContainerStyle={[styles.paymentSheetContent, { paddingBottom: Math.max(insets.bottom, 20) }]}>
           <View style={styles.dialogHead}>
             <Text style={styles.sheetTitle}>Select Payment Method</Text>
-            <Pressable onPress={() => setModal('none')} hitSlop={8}><Feather name="x" size={16} color={colors.gray} /></Pressable>
-          </View>
-          {(['paymongo', 'cash'] as Payment[]).map((p) => (
-            <Pressable key={p} style={styles.payOption} onPress={() => setTempPayment(p)}>
-              <View style={styles.payOptionIcon}>{paymentIcon(p)}</View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.sumValue}>
-                  {p === 'paymongo' ? 'Online payment' : 'Cash on Delivery'}
-                </Text>
-                {p === 'paymongo' ? (
-                  <Text style={styles.metaText}>Pay securely with GCash, Maya, or QR Ph</Text>
-                ) : null}
-              </View>
-              <Ionicons name={tempPayment === p ? 'radio-button-on' : 'radio-button-off'} size={18} color={tempPayment === p ? colors.primary : colors.gray} />
+            <Pressable accessibilityRole="button" accessibilityLabel="Close payment method" onPress={() => setModal('none')} style={styles.paymentSheetClose}>
+              <Feather name="x" size={20} color={colors.gray} />
             </Pressable>
-          ))}
+          </View>
+          {(['paymongo', 'cash'] as Payment[]).map((p) => {
+            // Online payment (PayMongo) is being retired; keep it visible but
+            // unselectable so customers can only place Cash on Delivery orders.
+            const unavailable = p === 'paymongo';
+            return (
+              <Pressable
+                key={p}
+                style={[styles.payOption, unavailable && styles.payOptionUnavailable]}
+                disabled={unavailable}
+                accessibilityRole="radio"
+                accessibilityState={{ checked: tempPayment === p, disabled: unavailable }}
+                accessibilityHint={unavailable ? 'Online payment is coming soon' : undefined}
+                onPress={() => setTempPayment(p)}
+              >
+                <View style={styles.payOptionIcon}>{paymentIcon(p)}</View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.sumValue}>
+                    {p === 'paymongo' ? 'Online payment' : 'Cash on Delivery'}
+                  </Text>
+                  {unavailable ? (
+                    <View style={styles.comingSoonPill}>
+                      <Text style={styles.comingSoonText}>COMING SOON</Text>
+                    </View>
+                  ) : null}
+                </View>
+                <Ionicons
+                  name={tempPayment === p && !unavailable ? 'radio-button-on' : 'radio-button-off'}
+                  size={18}
+                  color={tempPayment === p && !unavailable ? colors.primary : colors.gray}
+                />
+              </Pressable>
+            );
+          })}
           <Pressable style={[styles.cta, { marginTop: 16 }]} onPress={() => { setPayment(tempPayment); setModal('none'); showToast('Payment Method Successfully Changed'); }}>
             <Text style={styles.ctaText}>SAVE CHANGES</Text>
           </Pressable>
-        </View>
-      </Modal>
+        </ScrollView>
+      </BottomSheetModal>
 
       {/* Schedule */}
       <Modal visible={modal === 'sched'} transparent animationType="fade" onRequestClose={() => setModal('none')}>
@@ -2236,73 +2269,75 @@ const styles = StyleSheet.create({
   progressFill: { height: '100%', borderRadius: radii.card, backgroundColor: colors.primary },
 
   locationScreen: { flex: 1, backgroundColor: colors.surface },
-  locationContent: { paddingHorizontal: 16, paddingTop: 8, paddingBottom: 24 },
-  locationTitle: { fontFamily: fonts.bold, fontSize: 24, lineHeight: 32, color: colors.heading, marginTop: 24 },
+  locationContent: { paddingHorizontal: 16, paddingTop: 4, paddingBottom: 12 },
+  locationTitle: { fontFamily: fonts.bold, fontSize: 24, lineHeight: 32, color: colors.heading, marginTop: 14 },
   locationSubtitle: { fontFamily: fonts.regular, fontSize: 14, lineHeight: 21, color: colors.grayText, marginTop: 2 },
-  locationSectionLabel: { fontFamily: fonts.semibold, fontSize: 12, color: colors.gray, marginTop: 24, marginBottom: 10 },
+  locationSectionLabel: { fontFamily: fonts.semibold, fontSize: 12, color: colors.gray, marginTop: 14, marginBottom: 6 },
   locationAddressCard: {
-    minHeight: 92,
+    minHeight: 64,
     borderWidth: 1,
     borderColor: colors.cardBorder,
     borderRadius: radii.card,
-    paddingHorizontal: 14,
-    paddingVertical: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
     backgroundColor: colors.surface,
   },
-  locationIconWrap: { width: 34, alignItems: 'center', justifyContent: 'center' },
-  locationAddressCopy: { flex: 1 },
+  locationIconWrap: { width: 26, alignItems: 'center', justifyContent: 'center' },
+  locationAddressCopy: { flex: 1, minWidth: 0 },
   locationAddressLabel: { fontFamily: fonts.semibold, fontSize: 16, color: colors.heading, marginBottom: 2 },
   locationAddressText: { fontFamily: fonts.regular, fontSize: 12, lineHeight: 18, color: colors.grayText },
   locationEmptyCard: {
-    minHeight: 86,
+    minHeight: 64,
     borderWidth: 1,
     borderStyle: 'dashed',
     borderColor: colors.cardBorder,
     borderRadius: radii.card,
     paddingHorizontal: 16,
-    paddingVertical: 14,
+    paddingVertical: 10,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    gap: 8,
     backgroundColor: colors.surfaceMuted,
   },
   locationEmptyTitle: { fontFamily: fonts.semibold, fontSize: 14, color: colors.heading, marginBottom: 2 },
   locationEmptyText: { fontFamily: fonts.regular, fontSize: 11, lineHeight: 17, color: colors.grayText },
-  addAddressButton: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: 8, alignSelf: 'flex-start', marginTop: 10 },
+  addAddressButton: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: 8, alignSelf: 'flex-start', marginTop: 5 },
   addAddressText: { fontFamily: fonts.medium, fontSize: 13, color: colors.primary },
-  locationDivider: { height: 1, backgroundColor: colors.border, marginTop: 14 },
+  locationDivider: { height: 1, backgroundColor: colors.border, marginTop: 6 },
   branchCard: {
-    minHeight: 104,
+    minHeight: 64,
     borderWidth: 1,
     borderColor: colors.cardBorder,
     borderRadius: radii.card,
-    padding: 14,
-    marginBottom: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 8,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    gap: 8,
     backgroundColor: colors.surface,
   },
-  branchCardSelected: { borderWidth: 2, borderColor: colors.primary, backgroundColor: 'rgba(0,123,193,0.03)' },
-  branchIconWrap: { width: 36, alignItems: 'center', justifyContent: 'center' },
-  branchCopy: { flex: 1 },
-  nearestBadge: { alignSelf: 'flex-start', borderRadius: radii.chip, backgroundColor: colors.primaryTint, paddingHorizontal: 7, paddingVertical: 3, marginBottom: 6 },
+  branchCardSelected: { borderColor: colors.primary, backgroundColor: 'rgba(0,123,193,0.03)' },
+  branchIconWrap: { width: 26, alignItems: 'center', justifyContent: 'center' },
+  branchCopy: { flex: 1, minWidth: 0 },
+  nearestBadge: { alignSelf: 'flex-start', borderRadius: radii.chip, backgroundColor: colors.primaryTint, paddingHorizontal: 7, paddingVertical: 2, marginBottom: 4 },
   nearestBadgeText: { fontFamily: fonts.semibold, fontSize: 9, color: colors.primary },
   branchName: { fontFamily: fonts.semibold, fontSize: 15, lineHeight: 20, color: colors.heading },
   branchMeta: { fontFamily: fonts.regular, fontSize: 11, lineHeight: 17, color: colors.grayText, marginTop: 2 },
-  branchAvailability: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 7 },
-  branchAvailabilityText: { fontFamily: fonts.medium, fontSize: 11, color: colors.primary },
+  branchAvailability: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 },
+  branchAvailabilityText: { flexShrink: 1, fontFamily: fonts.medium, fontSize: 11, color: colors.primary },
   locationFooter: {
-    paddingHorizontal: 20,
-    paddingTop: 14,
+    paddingHorizontal: 16,
+    paddingTop: 8,
     backgroundColor: colors.surface,
     borderTopWidth: 1,
     borderTopColor: colors.border,
   },
-  locationReassurance: { fontFamily: fonts.regular, fontSize: 11, color: colors.grayText, textAlign: 'center', marginTop: 10 },
+  locationContinueButton: { height: 48 },
+  locationReassurance: { fontFamily: fonts.regular, fontSize: 11, color: colors.grayText, textAlign: 'center', marginTop: 5 },
 
   selectScreen: { flex: 1, backgroundColor: colors.surface },
   selectScroll: { flex: 1 },
@@ -2446,34 +2481,26 @@ const styles = StyleSheet.create({
   addressMapFullscreenBackdrop: { flex: 1, backgroundColor: colors.surface },
   addressMapFullscreen: { flex: 1, backgroundColor: colors.redeemPale },
   addressMapTopBar: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    paddingTop: 48,
-    paddingHorizontal: 14,
-    paddingBottom: 12,
+    paddingHorizontal: 12,
+    paddingBottom: 4,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: 'rgba(255,255,255,0.94)',
-  },
-  addressMapTopButton: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.surface },
-  addressMapTopTitle: { flex: 1, marginHorizontal: 10, fontFamily: fonts.semibold, fontSize: 16, color: colors.heading, textAlign: 'center' },
-  addressMapBottomCard: {
-    position: 'absolute',
-    left: 12,
-    right: 12,
-    bottom: 18,
-    padding: 16,
-    borderRadius: radii.card,
     backgroundColor: colors.surface,
-    ...cardShadow,
+  },
+  addressMapTopButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+  addressMapTopTitle: { flex: 1, marginHorizontal: 6, fontFamily: fonts.semibold, fontSize: 16, color: colors.heading, textAlign: 'center' },
+  addressMapCanvas: { flex: 1, minHeight: 0, overflow: 'hidden' },
+  addressMapBottomCard: {
+    paddingHorizontal: 14,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    backgroundColor: colors.surface,
   },
   addressMapBottomTitle: { fontFamily: fonts.semibold, fontSize: 15, color: colors.heading, marginBottom: 4 },
   addressMapBottomText: { fontFamily: fonts.regular, fontSize: 11, lineHeight: 16, color: colors.grayText, marginBottom: 6 },
-  addressMapAttribution: { fontFamily: fonts.regular, fontSize: 9, color: colors.muted, marginBottom: 10 },
-  addressMapConfirmButton: { marginTop: 2 },
+  addressMapAttribution: { fontFamily: fonts.regular, fontSize: 9, color: colors.grayText, marginBottom: 6 },
+  addressMapConfirmButton: { height: 48 },
   addressDialog: {
     width: '100%',
     maxWidth: 430,
@@ -2645,11 +2672,16 @@ const styles = StyleSheet.create({
   scheduleConfirm: { marginTop: 16 },
   ctaDisabled: { backgroundColor: colors.muted, opacity: 0.7 },
 
-  sheetBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.3)' },
-  bottomSheet: { backgroundColor: '#fff', borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingHorizontal: 20, paddingTop: 20, paddingBottom: 32 },
+  bottomSheet: { maxHeight: '90%', overflow: 'hidden', backgroundColor: '#fff', borderTopLeftRadius: 20, borderTopRightRadius: 20 },
+  paymentSheetScroll: { flexGrow: 0 },
+  paymentSheetContent: { paddingHorizontal: 20, paddingTop: 12 },
+  paymentSheetClose: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
   sheetTitle: { fontFamily: fonts.semibold, fontSize: 20, color: colors.heading },
   payOption: { flexDirection: 'row', alignItems: 'center', gap: 16, paddingVertical: 12 },
   payOptionIcon: { width: 56, alignItems: 'center' },
+  payOptionUnavailable: { opacity: 0.4 },
+  comingSoonPill: { alignSelf: 'flex-end', marginTop: 4, backgroundColor: '#E0E0E0', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 3 },
+  comingSoonText: { fontFamily: fonts.semibold, fontSize: 10, letterSpacing: 0.5, color: colors.grayText },
 
   confirmDialog: { width: '100%', maxWidth: 338, backgroundColor: '#fff', borderRadius: radii.card, paddingVertical: 24, paddingHorizontal: 16, alignItems: 'center', gap: 8 },
   confirmClose: { position: 'absolute', top: 12, right: 12, zIndex: 2 },

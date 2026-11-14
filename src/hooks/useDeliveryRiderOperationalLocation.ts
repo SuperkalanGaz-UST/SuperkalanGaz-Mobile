@@ -17,6 +17,7 @@ interface OperationalLocationStatus {
   message: string;
   lastSyncedAt: Date | null;
   ensurePermission: () => Promise<boolean>;
+  refreshForDispatch: () => Promise<void>;
 }
 
 const messages: Record<OperationalLocationState, string> = {
@@ -28,6 +29,15 @@ const messages: Record<OperationalLocationState, string> = {
   'permission-denied': 'Location permission is required before going Available.',
   error: 'Operational GPS could not sync. Keep the app open and check your connection.',
 };
+
+function sendPosition(position: Location.LocationObject) {
+  return updateDeliveryRiderOperationalLocation({
+    latitude: Number(position.coords.latitude.toFixed(8)),
+    longitude: Number(position.coords.longitude.toFixed(8)),
+    accuracyM: Number(Math.max(0, position.coords.accuracy ?? 1000).toFixed(2)),
+    capturedAt: new Date(position.timestamp).toISOString(),
+  });
+}
 
 /**
  * Foreground-only phone GPS for Service Request and dispatch operations. Expo
@@ -92,12 +102,7 @@ export function useDeliveryRiderOperationalLocation(
           },
           (position) => {
             if (!active || AppState.currentState !== 'active') return;
-            void updateDeliveryRiderOperationalLocation({
-              latitude: Number(position.coords.latitude.toFixed(8)),
-              longitude: Number(position.coords.longitude.toFixed(8)),
-              accuracyM: Number(Math.max(0, position.coords.accuracy ?? 0).toFixed(2)),
-              capturedAt: new Date(position.timestamp).toISOString(),
-            })
+            void sendPosition(position)
               .then((result) => {
                 if (!active || !result.recorded) return;
                 setState('tracking');
@@ -123,5 +128,25 @@ export function useDeliveryRiderOperationalLocation(
     };
   }, [enabled, ensurePermission, appState]);
 
-  return { state, message: messages[state], lastSyncedAt, ensurePermission };
+  const refreshForDispatch = async () => {
+    if (!enabled || AppState.currentState !== 'active' || (lastSyncedAt && Date.now() - lastSyncedAt.getTime() < 20_000)) return;
+    let timedOut = false;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const deadline = new Promise<void>(resolve => {
+        timeout = setTimeout(() => { timedOut = true; resolve(); }, 3_000);
+      });
+      const refresh = async () => {
+        const position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+        if (!timedOut && AppState.currentState === 'active') await sendPosition(position);
+      };
+      await Promise.race([refresh(), deadline]);
+    } catch {
+      // An unavailable phone fix can still lead to explicit plate confirmation.
+    } finally {
+      clearTimeout(timeout);
+    }
+  };
+
+  return { state, message: messages[state], lastSyncedAt, ensurePermission, refreshForDispatch };
 }

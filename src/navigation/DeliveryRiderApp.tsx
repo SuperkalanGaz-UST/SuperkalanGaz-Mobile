@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ComponentProps } from 'react';
-import { usePreventRemove } from '@react-navigation/native';
+import { useIsFocused, usePreventRemove } from '@react-navigation/native';
 import { createNativeStackNavigator, type NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, AppState, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import {
   DeliveryRiderBottomNav,
@@ -17,6 +17,7 @@ import {
   startDelivery,
   submitDeliveredWithProof,
   type DeliveryAssignment,
+  type DeliveryMotorcycleChoice,
   type DeliveryProofPhoto,
   type DeliveryRiderDashboard,
 } from '@/lib/deliveryRiderApi';
@@ -24,6 +25,7 @@ import { DeliveryCompletedScreen, DeliveryProofScreen } from '@/screens/driver/D
 import {
   DeliveryRiderDeliveryScreen,
   DeliveryRiderHomeScreen,
+  OfferSheet,
   DeliveryRiderProfileScreen,
 } from '@/screens/driver/DeliveryRiderScreens';
 import { colors } from '@/theme/colors';
@@ -64,6 +66,11 @@ function CompletionRoute({ assignment, navigation, onDone }: {
   return assignment ? <DeliveryCompletedScreen assignment={assignment} onDone={onDone} /> : null;
 }
 
+function FocusedOfferSheet(props: ComponentProps<typeof OfferSheet>) {
+  const focused = useIsFocused();
+  return focused ? <OfferSheet {...props} /> : null;
+}
+
 export function DeliveryRiderApp() {
   const { signOut } = useAuth();
   const [dashboard, setDashboard] = useState<DeliveryRiderDashboard | null>(null);
@@ -73,6 +80,8 @@ export function DeliveryRiderApp() {
   const [busy, setBusy] = useState(false);
   const submittingProof = useRef(false);
   const [error, setError] = useState('');
+  const [motorcycleSelection, setMotorcycleSelection] = useState<{ offerId: string; vehicles: DeliveryMotorcycleChoice[] } | null>(null);
+  const dashboardVersion = useRef(0);
   const locationEnabled = dashboard?.deliveryRider.availability === 'Available'
     || dashboard?.deliveryRider.availability === 'On Delivery';
   const operationalLocation = useDeliveryRiderOperationalLocation(locationEnabled);
@@ -80,8 +89,10 @@ export function DeliveryRiderApp() {
   const load = useCallback(async (refresh = false) => {
     refresh ? setRefreshing(true) : setLoading(true);
     setError('');
+    const version = ++dashboardVersion.current;
     try {
-      setDashboard(await getDeliveryRiderDashboard());
+      const next = await getDeliveryRiderDashboard();
+      if (version === dashboardVersion.current) setDashboard(next);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : 'Delivery Rider workspace is unavailable.');
     } finally {
@@ -93,7 +104,35 @@ export function DeliveryRiderApp() {
     void load();
   }, [load]);
 
+  const available = dashboard?.deliveryRider.availability === 'Available';
+  useEffect(() => {
+    if (!available || busy || refreshing) return;
+    let pending = false;
+    let active = true;
+    const refreshOffers = async () => {
+      if (pending || AppState.currentState !== 'active' || (typeof document !== 'undefined' && document.hidden)) return;
+      pending = true;
+      const version = dashboardVersion.current;
+      try {
+        const next = await getDeliveryRiderDashboard();
+        if (active && version === dashboardVersion.current) setDashboard(next);
+      } catch {
+        // Explicit refresh remains available while the service is unreachable.
+      } finally {
+        pending = false;
+      }
+    };
+    const interval = setInterval(() => void refreshOffers(), 10_000);
+    const subscription = AppState.addEventListener('change', state => { if (state === 'active') void refreshOffers(); });
+    return () => {
+      active = false;
+      clearInterval(interval);
+      subscription.remove();
+    };
+  }, [available, busy, refreshing]);
+
   const runDashboardAction = async (action: () => Promise<DeliveryRiderDashboard>) => {
+    dashboardVersion.current += 1;
     setBusy(true);
     setError('');
     try {
@@ -222,19 +261,6 @@ export function DeliveryRiderApp() {
               await runDashboardAction(() => setDeliveryRiderAvailability(available));
             })();
           }}
-          onAcceptOffer={() => {
-            if (!dashboard.currentOffer) return;
-            void runDashboardAction(() => acceptDeliveryOffer(dashboard.currentOffer!.offerId)).then((accepted) => {
-              if (accepted) {
-                setCompletedAssignment(null);
-                navigation.navigate('delivery');
-              }
-            });
-          }}
-          onDeclineOffer={() => {
-            if (!dashboard.currentOffer) return;
-            void runDashboardAction(() => declineDeliveryOffer(dashboard.currentOffer!.offerId));
-          }}
           onOpenDelivery={() => navigation.navigate('delivery')}
         />
       );
@@ -243,6 +269,41 @@ export function DeliveryRiderApp() {
     return (
       <View style={styles.app}>
         {renderTab()}
+        {dashboard.currentOffer && (
+          <FocusedOfferSheet
+            key={dashboard.currentOffer.offerId}
+            offer={dashboard.currentOffer}
+            vehicles={motorcycleSelection?.offerId === dashboard.currentOffer.offerId ? motorcycleSelection.vehicles : []}
+            busy={busy}
+            error={error}
+            onAccept={(vehicleId) => {
+              const offerId = dashboard.currentOffer?.offerId;
+              if (!offerId) return;
+              let dispatched = false;
+              void runDashboardAction(async () => {
+                if (!vehicleId) await operationalLocation.refreshForDispatch();
+                const next = await acceptDeliveryOffer(offerId, vehicleId);
+                setMotorcycleSelection(next.vehicleChoices?.length && next.currentOffer?.offerId === offerId
+                  ? { offerId, vehicles: next.vehicleChoices } : null);
+                dispatched = Boolean(next.activeDelivery);
+                return next;
+              }).then(succeeded => {
+                if (succeeded && dispatched) {
+                  setCompletedAssignment(null);
+                  navigation.navigate('delivery');
+                }
+              });
+            }}
+            onRetry={() => {
+              setMotorcycleSelection(null);
+              setError('');
+            }}
+            onDecline={() => {
+              const offerId = dashboard.currentOffer?.offerId;
+              if (offerId) void runDashboardAction(() => declineDeliveryOffer(offerId));
+            }}
+          />
+        )}
         <DeliveryRiderBottomNav
           active={activeTab}
           onChange={(tab) => {

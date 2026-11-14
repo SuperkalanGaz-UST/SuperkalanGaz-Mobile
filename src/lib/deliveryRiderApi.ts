@@ -44,7 +44,12 @@ export interface DeliveryAssignment {
 export interface DeliveryOffer {
   offerId: string;
   expiresAt: string;
-  assignment: Omit<DeliveryAssignment, 'dispatchedAt' | 'inTransitAt'>;
+  assignment: Omit<DeliveryAssignment, 'dispatchedAt' | 'inTransitAt' | 'vehicleLabel'>;
+}
+
+export interface DeliveryMotorcycleChoice {
+  id: string;
+  label: string;
 }
 
 export interface DeliveryRiderDashboard {
@@ -128,11 +133,15 @@ export async function updateDeliveryRiderOperationalLocation(
   );
 }
 
-export async function acceptDeliveryOffer(offerId: string): Promise<DeliveryRiderDashboard> {
+export async function acceptDeliveryOffer(
+  offerId: string,
+  vehicleId?: string,
+): Promise<DeliveryRiderDashboard & { vehicleChoices: DeliveryMotorcycleChoice[] | null }> {
   const response = await apiFetch(`/delivery-rider/offers/${encodeURIComponent(offerId)}/accept`, {
     method: 'POST',
+    body: JSON.stringify(vehicleId ? { vehicleId } : {}),
   });
-  return responseData<DeliveryRiderDashboard>(response, 'This delivery offer can no longer be accepted.');
+  return responseData(response, 'This delivery offer can no longer be accepted.');
 }
 
 export async function declineDeliveryOffer(offerId: string): Promise<DeliveryRiderDashboard> {

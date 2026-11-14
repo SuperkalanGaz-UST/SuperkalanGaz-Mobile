@@ -4,6 +4,7 @@ import {
   AccessibilityInfo,
   Animated,
   Easing,
+  Platform,
   Image,
   AppState,
   Pressable,
@@ -45,12 +46,14 @@ import { OrderProgressTracker } from '@/components/orders/OrderProgressTracker';
  * Greeting, Service Request milestones, and the account's track-specific loyalty
  * summary are loaded from the authenticated session and NestJS API.
  */
-type LoyaltyCatalogItem = { id: string; branch_id: string; name: string; points_cost: number };
+type LoyaltyCatalogItem = { id: string; branch_id: string; branch_name: string | null; name: string; points_cost: number; stock_qty: number };
 type HouseholdAccountRow = { branch_id: string; points_balance: number };
 type HouseholdHistoryRow = { id: string; type: string; points_delta: number; created_at: string };
 type LoyaltyRedemptionRow = {
   id: string;
   catalog_item_name: string | null;
+  branch_name: string | null;
+  rejected_reason: string | null;
   points_spent: number | null;
   redemption_code: string | null;
   status: string;
@@ -75,17 +78,8 @@ type CustomerLoyaltyPayload = {
   commercial_accounts?: CommercialAccountRow[];
   commercial_purchases?: CommercialPurchaseRow[];
   active_redemptions?: LoyaltyRedemptionRow[];
+  recent_redemptions?: LoyaltyRedemptionRow[];
 };
-
-function uniqueCatalogItems(items: LoyaltyCatalogItem[]): LoyaltyCatalogItem[] {
-  const seen = new Set<string>();
-  return items.filter((item) => {
-    const key = `${item.branch_id}:${item.name.trim().toLocaleLowerCase()}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
 
 function requestFailureMessage(label: string, reason: unknown): string {
   if (reason instanceof Error && reason.message.includes('session expired')) {
@@ -165,6 +159,7 @@ export function HomeScreen({
   const [history, setHistory] = useState<HouseholdHistoryRow[]>([]);
   const [householdAccounts, setHouseholdAccounts] = useState<HouseholdAccountRow[]>([]);
   const [activeCodes, setActiveCodes] = useState<LoyaltyRedemptionRow[]>([]);
+  const [recentRedemptions, setRecentRedemptions] = useState<LoyaltyRedemptionRow[]>([]);
   const [commercialAccounts, setCommercialAccounts] = useState<CommercialAccountRow[]>([]);
   const [commercialPurchases, setCommercialPurchases] = useState<CommercialPurchaseRow[]>([]);
   const [loyaltyError, setLoyaltyError] = useState<string | null>(null);
@@ -184,7 +179,7 @@ export function HomeScreen({
 
       if (catResult.status === 'fulfilled' && catResult.value.ok) {
         const catData = (await catResult.value.json()) as { catalogItems?: LoyaltyCatalogItem[] };
-        setCatalog(uniqueCatalogItems(catData.catalogItems ?? []));
+        setCatalog(catData.catalogItems ?? []);
       } else if (catResult.status === 'fulfilled') {
         errors.push(`Catalog ${catResult.value.status}`);
       } else {
@@ -199,6 +194,7 @@ export function HomeScreen({
         setCommercialAccounts(meData.commercial_accounts ?? []);
         setCommercialPurchases(meData.commercial_purchases ?? []);
         setActiveCodes(meData.active_redemptions ?? []);
+        setRecentRedemptions(meData.recent_redemptions ?? []);
       } else if (meResult.status === 'fulfilled') {
         errors.push(`Rewards ${meResult.value.status}`);
       } else {
@@ -245,6 +241,10 @@ export function HomeScreen({
   const greetingName =
     typeof firstName === 'string' && firstName.trim() ? firstName.trim() : 'Customer';
   const heroHeight = insets.top + 290;
+  const compactWidth = winW < 360;
+  const heroGutter = compactWidth ? 16 : 24;
+  const orbitSize = Math.min(170, winW * 0.43);
+  const cylinderWidth = Math.min(138, winW * 0.35);
 
   const scrollRef = useRef<ScrollViewInstance>(null);
   const scrollOffset = useRef(0);
@@ -340,6 +340,25 @@ export function HomeScreen({
         const content = scroll?.getInnerViewRef();
         if (!scroll || !viewport || !content) {
           nextFrame();
+          return;
+        }
+
+        if (Platform.OS === 'web') {
+          // Use live browser rectangles for the target and the scrollport. The
+          // scroll event updates the highlight after a queued scroll takes effect.
+          const element = view as unknown as HTMLElement;
+          const scrollport = viewport as unknown as HTMLElement;
+          const publish = () => {
+            if (cancelled || !element.isConnected) return;
+            const { x, y, width, height } = element.getBoundingClientRect();
+            setGuideRect({ x, y, width, height, target: guideTarget });
+          };
+          updateScrolledSpotlight.current = publish;
+          const targetY = element.getBoundingClientRect().top - scrollport.getBoundingClientRect().top;
+          const destination = scrollToTarget ? Math.max(0, scrollport.scrollTop + targetY - 22) : 0;
+          if (Math.abs(scrollport.scrollTop - destination) <= 1) publish();
+          else scrollFallback = setTimeout(publish, 450);
+          scroll.scrollTo({ y: destination, animated: false });
           return;
         }
 
@@ -439,6 +458,7 @@ export function HomeScreen({
             history={history}
             householdAccounts={householdAccounts}
             activeCodes={activeCodes}
+            recentRedemptions={recentRedemptions}
             commercialAccounts={commercialAccounts}
             commercialPurchases={commercialPurchases}
             loyaltyError={loyaltyError}
@@ -468,7 +488,7 @@ export function HomeScreen({
           <View
             style={[
               styles.homeHero,
-              { height: heroHeight, paddingTop: insets.top + 10 },
+              { height: heroHeight, paddingTop: insets.top + 10, paddingHorizontal: heroGutter },
             ]}
           >
             <Svg
@@ -485,7 +505,7 @@ export function HomeScreen({
               />
             </Svg>
             <View style={styles.homeHeaderRow}>
-              <View>
+              <View style={styles.homeGreeting}>
                 <Text style={styles.homeHello}>
                   Hello, <Text style={styles.homeHelloName}>{greetingName}</Text>!
                 </Text>
@@ -517,7 +537,7 @@ export function HomeScreen({
                         {commercialPurchaseCount} / {commercialPurchaseTarget}
                       </Text>
                     </View>
-                    <View style={[styles.heroProgressBlock, styles.heroProgressBlockCommercial]}>
+                    <View style={[styles.heroProgressBlock, styles.heroProgressBlockCompact]}>
                       <Text style={styles.heroProgressLabel}>
                         {commercialPurchasesRemaining} more purchases to your free cylinder
                       </Text>
@@ -533,7 +553,7 @@ export function HomeScreen({
                       <Text style={styles.heroUnit}>points</Text>
                     </View>
                     <Text style={styles.heroLabel}>Household rewards</Text>
-                    <View style={styles.heroProgressBlock}>
+                    <View style={[styles.heroProgressBlock, compactWidth && styles.heroProgressBlockCompact]}>
                       <Text style={styles.heroProgressLabel}>{points > 0 ? 'Use points for rewards' : 'Earn points with every delivery'}</Text>
                       <View style={styles.heroProgressTrack}>
                         <View style={[styles.heroProgressFill, { width: points > 0 ? '100%' : '0%' }]} />
@@ -545,9 +565,9 @@ export function HomeScreen({
             </Pressable>
             <View
               pointerEvents="none"
-              style={[styles.heroOrbit, { top: insets.top + 65 }]}
+              style={[styles.heroOrbit, { top: insets.top + 65, width: orbitSize, height: orbitSize, borderRadius: orbitSize / 2 }]}
             />
-            <View pointerEvents="none" style={[styles.heroCylinder, { top: insets.top + 80 }]}>
+            <View pointerEvents="none" style={[styles.heroCylinder, { top: insets.top + 80, width: cylinderWidth }]}>
               <Image
                 source={cylinderFor('11 KG')}
                 style={styles.heroCylinderImage}
@@ -575,7 +595,7 @@ export function HomeScreen({
           </View>
 
           {/* Active order — only shown when a real in-flight order exists */}
-          <View style={styles.content}>
+          <View style={[styles.content, { paddingHorizontal: heroGutter }]}>
             {activeOrder && activeProgress ? (
               <>
                 <View style={styles.section}>
@@ -707,7 +727,6 @@ const styles = StyleSheet.create({
 
   homeHero: {
     backgroundColor: '#fff',
-    paddingHorizontal: 24,
     zIndex: 2,
     overflow: 'hidden',
   },
@@ -732,6 +751,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
   },
+  homeGreeting: { flex: 1, marginRight: 8 },
   homeHello: { fontFamily: fonts.bold, fontSize: 24, color: '#fff' },
   homeHelloName: { color: '#fff' },
   homeSub: { fontFamily: fonts.medium, fontSize: 12, color: '#fff', marginTop: 3 },
@@ -744,7 +764,7 @@ const styles = StyleSheet.create({
   heroUnit: { fontFamily: fonts.semibold, fontSize: 16, color: '#fff' },
   heroLabel: { fontFamily: fonts.semibold, fontSize: 14, color: '#fff', marginTop: 2 },
   heroProgressBlock: { marginTop: 30, width: '95%' },
-  heroProgressBlockCommercial: { marginTop: 18 },
+  heroProgressBlockCompact: { marginTop: 18 },
   heroProgressLabel: { fontFamily: fonts.medium, fontSize: 10, color: '#fff', marginBottom: 7 },
   heroProgressTrack: {
     height: 4,
@@ -756,9 +776,6 @@ const styles = StyleSheet.create({
   heroOrbit: {
     position: 'absolute',
     right: 4,
-    width: 170,
-    height: 170,
-    borderRadius: 85,
     borderWidth: 2,
     borderStyle: 'dotted',
     borderColor: 'rgba(255,255,255,0.44)',
@@ -767,14 +784,13 @@ const styles = StyleSheet.create({
   heroCylinder: {
     position: 'absolute',
     right: 12,
-    width: 138,
     height: 205,
     zIndex: 10,
     transform: [{ scaleX: 1.06 }],
   },
   heroCylinderImage: { width: '100%', height: '100%' },
 
-  content: { paddingHorizontal: 24, paddingTop: 18, zIndex: 1 },
+  content: { paddingTop: 18, zIndex: 1 },
   section: { paddingTop: 4 },
   sectionTitle: {
     fontFamily: fonts.semibold,

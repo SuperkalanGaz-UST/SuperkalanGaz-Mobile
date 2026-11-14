@@ -4,7 +4,7 @@ import { createServer } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test, { after, before } from 'node:test';
-import { chromium } from 'playwright';
+import { chromium, devices, webkit } from 'playwright';
 
 // Run against the actual Expo export with SPA fallback, as configured on Vercel.
 // Auth and domain requests use synthetic fixtures and never reach real services.
@@ -77,8 +77,9 @@ function driverDashboard(assignment = null) {
 async function newContext(session, {
   signedOut = false, dashboard = driverDashboard(), orders = [],
   viewport = { width: 414, height: 896 }, reducedMotion = 'no-preference',
+  browserInstance = browser, device = {},
 } = {}) {
-  const context = await browser.newContext({ viewport, reducedMotion });
+  const context = await browserInstance.newContext({ ...device, viewport, reducedMotion });
   if (!signedOut) await context.addInitScript(({ key, session }) => {
     if (!sessionStorage.getItem('routing-test-initialized')) {
       localStorage.setItem(key, JSON.stringify(session));
@@ -554,4 +555,201 @@ test('order links retain the distinction between new requests and milestone trac
     assert.equal(requests.some(r => r.method !== 'GET'), false, 'Opening an order link must never create a request');
     assert.deepEqual(errors, []);
   } finally { await context.close(); }
+});
+
+test('the customer can choose a delivery pin in the browser', { timeout: 15_000 }, async () => {
+  const { context, page } = await newContext(sessionFor('customer'), { viewport: { width: 320, height: 568 } });
+  try {
+    await context.route('https://unpkg.com/maplibre-gl@*/dist/maplibre-gl.js', route => route.fulfill({
+      contentType: 'application/javascript',
+      body: `window.maplibregl = {
+        Map: class {
+          touchZoomRotate = { disableRotation() {} };
+          constructor() { const canvas = document.createElement('canvas'); canvas.style.cssText = 'width:100%;height:100%;display:block'; document.querySelector('#map').append(canvas); }
+          on(event, listener) {
+            if (event === 'load') setTimeout(listener, 0);
+            if (event === 'click') document.querySelector('canvas').onclick = () => listener({ lngLat: { lat: 14.604, lng: 120.99 } });
+          }
+          resize() {}
+          easeTo() {}
+        },
+        Marker: class {
+          setLngLat(position) { this.position = { lng: position[0], lat: position[1] }; return this; }
+          getLngLat() { return this.position; }
+          addTo() { return this; }
+          on() {}
+        },
+      };`,
+    }));
+    await context.route('https://nominatim.openstreetmap.org/reverse?*', route => route.fulfill({
+      json: { address: { road: 'Test delivery street' } },
+    }));
+    await page.goto(`${baseUrl}/customer/order`);
+    await page.getByRole('button', { name: 'Add another address' }).click();
+    await page.getByRole('button', { name: 'Choose address on map' }).click();
+    const picker = page.getByText('Choose delivery location', { exact: true });
+    await picker.waitFor();
+    assert.equal(await page.getByText('React Native WebView does not support this platform.').count(), 0);
+    const confirm = page.getByText('Use this location', { exact: true });
+    const map = page.frameLocator('iframe[title="Delivery location map"]').locator('canvas');
+    await map.click();
+    await confirm.click();
+    await page.locator('input[value="Test delivery street"]').waitFor();
+  } finally { await context.close(); }
+});
+
+test('a Delivery Rider goes Available without a vehicle and confirms an ambiguous GPS match', { timeout: 15_000 }, async () => {
+  const offline = driverDashboard();
+  offline.deliveryRider.vehicle = null;
+  const assignment = { serviceRequestId: 'order-a', srCode: 'SR-10001', customerName: 'Test customer', deliveryAddress: 'Test address',
+    cylinderSize: '11kg', quantity: 1, requestedAt: new Date().toISOString() };
+  const offered = {
+    ...offline,
+    deliveryRider: { ...offline.deliveryRider, availability: 'Available' },
+    currentOffer: { offerId: 'test-offer', expiresAt: new Date(Date.now() + 60_000).toISOString(), assignment },
+  };
+  const choices = [{ id: 'motorcycle-a', label: 'ABC 123' }, { id: 'motorcycle-b', label: 'DEF 456' }];
+  const { context, page } = await newContext(sessionFor('driver'), { dashboard: offline, viewport: { width: 320, height: 568 } });
+  try {
+    await context.grantPermissions(['geolocation']);
+    await context.setGeolocation({ latitude: 14.6, longitude: 121, accuracy: 10 });
+    await context.route('**/api/delivery-rider/availability', route => {
+      assert.deepEqual(route.request().postDataJSON(), { available: true });
+      return route.fulfill({ json: offered });
+    });
+    const writes = [];
+    await context.route('**/api/delivery-rider/offers/test-offer/accept', route => {
+      const input = route.request().postDataJSON();
+      writes.push(input);
+      if (!input.vehicleId) return route.fulfill({ json: { ...offered, vehicleChoices: choices } });
+      assert.deepEqual(input, { vehicleId: 'motorcycle-b' });
+      return route.fulfill({ json: {
+        ...driverDashboard({ ...assignment, vehicleLabel: 'DEF 456', dispatchedAt: new Date().toISOString(), inTransitAt: null }),
+        vehicleChoices: null,
+      } });
+    });
+    await page.goto(`${baseUrl}/delivery-rider/home`);
+    await page.getByText('No vehicle assigned', { exact: true }).waitFor();
+    await page.getByText('Go Available', { exact: true }).click();
+    await page.getByRole('button', { name: 'Accept offer', exact: true }).click();
+    await page.getByText('Confirm your motorcycle', { exact: true }).waitFor();
+    const confirm = page.getByRole('button', { name: 'Confirm and accept', exact: true });
+    assert.equal(await confirm.isDisabled(), true);
+    await page.getByRole('radio', { name: 'DEF 456' }).click();
+    await confirm.click();
+    await expectPath(page, '/delivery-rider/delivery');
+    await page.getByText('DEF 456', { exact: true }).waitFor();
+    assert.deepEqual(writes, [{}, { vehicleId: 'motorcycle-b' }]);
+  } finally { await context.close(); }
+});
+
+test('payment sheet slides over a stationary fading backdrop', { timeout: 15_000 }, async () => {
+  const { context, page } = await newContext(sessionFor('customer'), { viewport: { width: 375, height: 625 } });
+  try {
+    await context.route('**/api/branches/public', route => route.fulfill({ json: { branches: [
+      { id: 'test-branch', name: 'Test branch', address: 'Test address', city: null, province: null },
+    ] } }));
+    await context.route('**/api/prices/for-branch/test-branch', route => route.fulfill({ json: {
+      prices: ['50kg', '22kg', '11kg', '5kg', '2.7kg'].map(cylinder_size => ({ cylinder_size, unit_price: 1200 })),
+    } }));
+    await page.goto(`${baseUrl}/customer/order`);
+    await page.getByText('Choose cylinders', { exact: true }).click();
+    await page.getByRole('button', { name: 'Select 11 KG cylinder' }).click();
+    await page.getByText('Review order', { exact: true }).click();
+    await page.getByText('Deliver now', { exact: true }).click();
+    await page.getByRole('button', { name: 'REVIEW ORDER', exact: true }).click();
+    const open = page.getByText('See all', { exact: true });
+    await open.waitFor();
+    await page.evaluate(() => {
+      const frames = [];
+      window.paymentFrames = frames;
+      function record() {
+        const backdrop = document.querySelector('[data-testid="payment-sheet-backdrop"]');
+        const panel = document.querySelector('[data-testid="payment-sheet-panel"]');
+        if (backdrop && panel) {
+          const bounds = backdrop.getBoundingClientRect();
+          frames.push({ opacity: Number(getComputedStyle(backdrop).opacity), top: bounds.top, height: bounds.height, panelTop: panel.getBoundingClientRect().top });
+        }
+        requestAnimationFrame(record);
+      }
+      requestAnimationFrame(record);
+    });
+    await open.click();
+    const backdrop = page.getByTestId('payment-sheet-backdrop');
+    await page.getByText('Select Payment Method', { exact: true }).waitFor();
+    await page.waitForFunction(() => window.paymentFrames.some(frame => frame.opacity === 1), null, { timeout: 2_000 });
+    const frames = await page.evaluate(() => window.paymentFrames);
+    assert.ok(frames.some(frame => frame.opacity > 0 && frame.opacity < 1 && frame.panelTop > frames.at(-1).panelTop));
+    assert.ok(frames.every(frame => frame.top === 0 && frame.height === 625));
+    const panel = page.getByTestId('payment-sheet-panel');
+    // Online payment is being retired: it stays visible but disabled, marked Coming soon.
+    const online = panel.getByRole('radio', { name: /Online payment/ });
+    assert.equal(await online.isDisabled(), true);
+    await panel.getByText('COMING SOON', { exact: true }).waitFor({ timeout: 3_000 });
+    await panel.getByText('SAVE CHANGES', { exact: true }).click({ timeout: 3_000 });
+    await backdrop.waitFor({ state: 'detached' });
+    assert.equal(await page.getByText('Online payment — GCash, Maya, or QR Ph', { exact: true }).count(), 0);
+  } finally { await context.close(); }
+});
+
+test('the customer guide fits a narrow Safari viewport and highlights the live controls', { timeout: 20_000 }, async () => {
+  const safari = await webkit.launch();
+  try {
+    const { page } = await newContext(sessionFor('customer'), {
+      browserInstance: safari, device: devices['iPhone SE'], viewport: { width: 320, height: 568 }, reducedMotion: 'reduce',
+    });
+    await page.goto(`${baseUrl}/customer/home?showGuide=true`);
+    const next = page.getByRole('button', { name: 'NEXT', exact: true });
+    const spotlight = page.getByTestId('app-guide-spotlight');
+    const card = page.getByTestId('app-guide-card');
+    const expectSpotlight = async target => {
+      await page.waitForFunction(element => {
+        const hole = document.querySelector('[data-testid="app-guide-spotlight"]').getBoundingClientRect();
+        const bounds = element.getBoundingClientRect();
+        return hole.top <= bounds.top && hole.bottom >= bounds.bottom && hole.left <= bounds.left && hole.right >= bounds.right;
+      }, await target.elementHandle(), { timeout: 2_000 });
+    };
+    await next.click();
+    await expectSpotlight(page.getByText('Household rewards', { exact: true }));
+    await next.click();
+    await expectSpotlight(page.getByText('Active Orders (0)', { exact: true }));
+    await page.setViewportSize({ width: 320, height: 385 });
+    await expectSpotlight(page.getByText('Active Orders (0)', { exact: true }));
+    await page.waitForFunction(() => {
+      const card = document.querySelector('[data-testid="app-guide-card"]').getBoundingClientRect();
+      return card.left >= 12 && card.right <= 308 && card.bottom <= 373;
+    }, null, { timeout: 2_000 }).catch(async error => {
+      const sizes = await page.evaluate(() => ({ innerHeight, height: visualViewport.height, scale: visualViewport.scale, offset: visualViewport.offsetTop, root: document.querySelector('#root').clientHeight }));
+      throw new Error(`Guide card ${JSON.stringify(await card.boundingBox())}, viewport ${JSON.stringify(sizes)}`, { cause: error });
+    });
+    await page.getByRole('button', { name: 'Close guide' }).click();
+    await spotlight.waitFor({ state: 'hidden' });
+    for (const name of ['Home', 'More']) {
+      const tab = await page.getByRole('button', { name, exact: true }).boundingBox();
+      assert.ok(tab.x >= 12 && tab.x + tab.width <= 308, `${name} should fit inside the tab bar`);
+    }
+  } finally { await safari.close(); }
+});
+
+test('History tab shows a red bubble counting only in-progress orders', { timeout: 15_000 }, async () => {
+  const order = (id, status) => ({ id, status, cylinder_size: '11kg', quantity: 1, requested_at: '2026-11-13T00:00:00Z', total_amount: 659, payment_method: 'Cash on Delivery' });
+  const withActive = await newContext(sessionFor('customer'), {
+    orders: [order('pending-order', 'Pending'), order('en-route-order', 'En Route'), order('delivered-order', 'Delivered'), order('cancelled-order', 'Cancelled')],
+  });
+  try {
+    await withActive.page.goto(`${baseUrl}/customer/home`);
+    const badge = withActive.page.getByTestId('history-badge');
+    await badge.waitFor({ timeout: 5_000 });
+    assert.equal(await badge.innerText(), '2');
+    await withActive.page.getByRole('button', { name: 'History, 2 active orders' }).waitFor();
+  } finally { await withActive.context.close(); }
+
+  const allClosed = await newContext(sessionFor('customer'), {
+    orders: [order('delivered-order', 'Delivered'), order('cancelled-order', 'Cancelled')],
+  });
+  try {
+    await allClosed.page.goto(`${baseUrl}/customer/home`);
+    await allClosed.page.getByRole('button', { name: 'History', exact: true }).waitFor();
+    assert.equal(await allClosed.page.getByTestId('history-badge').count(), 0);
+  } finally { await allClosed.context.close(); }
 });

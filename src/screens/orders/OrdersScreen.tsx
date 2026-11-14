@@ -105,8 +105,11 @@ export function OrdersScreen({ onNavigate, activeOrdersRef }: {
     () => orders.filter((order) => order.status !== 'Delivered' && order.status !== 'Completed' && order.status !== 'Cancelled'),
     [orders],
   );
+  // Past = every closed request, including Cancelled ones. Cancelled orders used
+  // to match neither tab, so a customer whose only closed order was cancelled
+  // saw an empty history.
   const pastOrders = useMemo(
-    () => orders.filter((order) => order.status === 'Delivered' || order.status === 'Completed'),
+    () => orders.filter((order) => order.status === 'Delivered' || order.status === 'Completed' || order.status === 'Cancelled'),
     [orders],
   );
 
@@ -184,11 +187,15 @@ export function OrdersScreen({ onNavigate, activeOrdersRef }: {
     }
   };
 
-  const orderCard = (o: OrderRow, past: boolean) => (
+  const orderCard = (o: OrderRow, past: boolean) => {
+    const cancelled = o.status === 'Cancelled';
+    // CSAT feedback is post-delivery only; a cancelled request was never delivered.
+    const rateable = past && !cancelled;
+    return (
     <View key={o.id} style={styles.orderCard}>
       {past && (
-        <View style={styles.completedBadge}>
-          <Text style={styles.completedText}>COMPLETED</Text>
+        <View style={[styles.completedBadge, cancelled && styles.cancelledBadge]}>
+          <Text style={[styles.completedText, cancelled && styles.cancelledText]}>{cancelled ? 'CANCELLED' : 'COMPLETED'}</Text>
         </View>
       )}
       <View style={styles.orderBody}>
@@ -204,7 +211,7 @@ export function OrdersScreen({ onNavigate, activeOrdersRef }: {
               ? 'Cash on Delivery'
               : o.payment_status === 'Paid' ? 'Paid' : 'Awaiting payment'}
           </Text>
-          {o.payment_method === 'PayMongo' && o.payment_status !== 'Paid' && (
+          {o.payment_method === 'PayMongo' && o.payment_status !== 'Paid' && !cancelled && (
             <Pressable
               style={[styles.retryPaymentBtn, retryingOrderId !== null && styles.disabledBtn]}
               disabled={retryingOrderId !== null}
@@ -217,21 +224,22 @@ export function OrdersScreen({ onNavigate, activeOrdersRef }: {
           )}
         </View>
       </View>
-      <View style={[styles.orderFooter, { height: past ? 50 : 30 }]}>
+      <View style={[styles.orderFooter, { height: rateable ? 50 : 30 }]}>
         <View>
           <Pressable onPress={() => { setSelectedOrderId(o.id); setSub('details'); }}>
             <Text style={styles.footerLink}>View Order Details</Text>
           </Pressable>
           <Text style={styles.footerDate}>Order Date: {formatDate(o.requested_at)}</Text>
         </View>
-        {past && (
+        {rateable && (
           <Pressable style={styles.rateBtn} disabled={reviewedOrderIds.has(o.id)} onPress={() => openFeedback(o.id)}>
             <Text style={styles.rateBtnText}>{reviewedOrderIds.has(o.id) ? 'Feedback submitted' : 'Rate this order'}</Text>
           </Pressable>
         )}
       </View>
     </View>
-  );
+    );
+  };
 
   const renderList = () => {
     const visibleOrders = tab === 'active' ? activeOrders : pastOrders;
@@ -250,7 +258,7 @@ export function OrdersScreen({ onNavigate, activeOrdersRef }: {
                 onPress={() => setTab(t)}
               >
                 <Text style={[styles.tabText, { color: tab === t ? colors.primary : colors.muted }]}>
-                  {t === 'active' ? `Active Orders (${activeOrders.length})` : 'Past Orders'}
+                  {t === 'active' ? `Active Orders (${activeOrders.length})` : `Past Orders (${pastOrders.length})`}
                 </Text>
               </Pressable>
             ))}
@@ -280,7 +288,7 @@ export function OrdersScreen({ onNavigate, activeOrdersRef }: {
               <View style={styles.emptyBox}>
                 <Image source={images.logo} style={{ width: 160, height: 120 }} resizeMode="contain" />
               </View>
-              <Text style={styles.emptyText}>{tab === 'active' ? 'You have no active orders.' : 'You have no completed orders yet.'}</Text>
+              <Text style={styles.emptyText}>{tab === 'active' ? 'You have no active orders.' : 'You have no past orders yet.'}</Text>
             </View>
           ) : (
             visibleOrders.map((o) => orderCard(o, tab === 'past'))
@@ -397,6 +405,8 @@ const styles = StyleSheet.create({
   orderCard: { marginHorizontal: 16, marginBottom: 16, borderRadius: radii.card, borderWidth: 1, borderColor: colors.activeCardBorder, backgroundColor: '#fff', overflow: 'hidden', ...cardShadow },
   completedBadge: { position: 'absolute', top: 10, right: 10, zIndex: 1, backgroundColor: colors.green, height: 17, width: 67, borderRadius: radii.card, alignItems: 'center', justifyContent: 'center' },
   completedText: { fontFamily: fonts.medium, fontSize: 8, color: '#c2dfbe' },
+  cancelledBadge: { backgroundColor: colors.danger },
+  cancelledText: { color: '#fff' },
   orderBody: { flexDirection: 'row', alignItems: 'center', minHeight: 130 },
   orderCyl: { width: 72, height: 110, marginLeft: 36, marginRight: 8 },
   orderInfo: { flex: 1, justifyContent: 'center', paddingVertical: 12, gap: 2 },
