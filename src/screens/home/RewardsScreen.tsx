@@ -1,4 +1,6 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
+import { uuid } from 'expo';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Image, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { colors } from '@/theme/colors';
@@ -13,12 +15,14 @@ import { apiFetch, apiErrorMessage } from '@/lib/api';
  * Home when the Rewards tab is active, so it shares Home's header + bottom nav.
  */
 type Sub = 'my' | 'all' | 'activeCodes';
-type Reward = { name: string; shortName: string; pts: number; img: number };
+type Reward = { name: string; pts: number; img: number | null };
 type CatalogItem = {
   id: string;
   branch_id: string;
+  branch_name: string | null;
   name: string;
   points_cost: number;
+  stock_qty: number;
 };
 type HouseholdAccount = { branch_id: string; points_balance: number };
 type CommercialAccount = {
@@ -43,37 +47,62 @@ type HistoryRow = {
 type ActiveRedemption = {
   id: string;
   catalog_item_name: string | null;
+  branch_name: string | null;
+  rejected_reason: string | null;
   points_spent: number | null;
   redemption_code: string | null;
   status: string;
 };
 
-/** Map reward catalog names to bundled images. Falls back to notebook. */
+/** Display a bundled reward image when the catalog item matches it. */
 const REWARD_IMAGES: Record<string, number> = {
   notebook: images.rewardNotebook,
   calendar: images.rewardCalendar,
   umbrella: images.rewardUmbrella,
   mug: images.rewardMug,
 };
-function rewardImageFor(name: string): number {
+function rewardImageFor(name: string): number | null {
   const lower = name.toLowerCase();
   for (const [key, img] of Object.entries(REWARD_IMAGES)) {
     if (lower.includes(key)) return img;
   }
-  return images.rewardNotebook;
+  return null;
 }
 
 const COMMERCIAL_PURCHASE_TARGET = 30;
 
-function RewardCard({ item, onPress, dim }: { item: Reward; onPress?: () => void; dim?: boolean }) {
+function RewardCard({
+  item, onPress, detail,
+}: {
+  item: Reward;
+  onPress?: () => void;
+  detail: string;
+}) {
   return (
-    <Pressable style={[styles.rewardCard, dim && { opacity: 0.3 }]} onPress={onPress} disabled={!onPress}>
-      <Image source={item.img} style={styles.rewardImg} resizeMode="contain" />
+    <Pressable
+      accessibilityRole="button"
+      accessibilityState={{ disabled: !onPress }}
+      style={[styles.rewardCard, !onPress && { opacity: 0.55 }]}
+      onPress={onPress}
+      disabled={!onPress}
+    >
+      <RewardImage image={item.img} />
       <View style={styles.ptsPill}>
         <Text style={styles.ptsPillText}>{item.pts} pts</Text>
       </View>
       <Text style={styles.rewardName}>{item.name}</Text>
+      <Text style={styles.rewardDetail}>{detail}</Text>
     </Pressable>
+  );
+}
+
+function RewardImage({ image }: { image: number | null }) {
+  return image ? (
+    <Image source={image} style={styles.rewardImg} resizeMode="contain" />
+  ) : (
+    <View style={[styles.rewardImg, { alignItems: 'center', justifyContent: 'center' }]}>
+      <Feather name="gift" size={32} color={colors.primary} />
+    </View>
   );
 }
 
@@ -266,6 +295,7 @@ export function RewardsScreen({
   history,
   householdAccounts,
   activeCodes,
+  recentRedemptions,
   commercialAccounts,
   commercialPurchases,
   loyaltyError,
@@ -278,18 +308,18 @@ export function RewardsScreen({
   history: HistoryRow[];
   householdAccounts: HouseholdAccount[];
   activeCodes: ActiveRedemption[];
+  recentRedemptions: ActiveRedemption[];
   commercialAccounts: CommercialAccount[];
   commercialPurchases: CommercialPurchase[];
   loyaltyError: string | null;
   onRefresh: () => void;
 }) {
-  const { accountType } = useAuth();
+  const { accountType, session } = useAuth();
   const [sub, setSub] = useState<Sub>(initialSub);
   const [redeemItem, setRedeemItem] = useState<CatalogItem | null>(null);
-  const [successCode, setSuccessCode] = useState<string | null>(null);
-  const [successPending, setSuccessPending] = useState(false);
-  const [viewCodeItem, setViewCodeItem] = useState<ActiveRedemption | null>(null);
-  const [codeConfirmed, setCodeConfirmed] = useState(false);
+  const [selectedCode, setSelectedCode] = useState<ActiveRedemption | null>(null);
+  const [recentlyIssued, setRecentlyIssued] = useState<ActiveRedemption | null>(null);
+  const submitting = useRef(false);
 
   const [loading, setLoading] = useState(false);
   const [redeemError, setRedeemError] = useState<string | null>(null);
@@ -297,29 +327,65 @@ export function RewardsScreen({
     householdAccounts.find((account) => account.branch_id === item.branch_id)?.points_balance ?? 0;
 
   const handleRedeem = async () => {
-    if (!redeemItem) return;
+    if (!redeemItem || !session?.user.id || submitting.current) return;
+    submitting.current = true;
     setRedeemError(null);
     setLoading(true);
+    const itemId = redeemItem.id;
+    const submissionKey = `household-redemption:${session.user.id}:${itemId}`;
     try {
+      // Keep the same submission across network errors and app restarts.
+      const existingSubmission = await AsyncStorage.getItem(submissionKey);
+      const submissionId = existingSubmission ?? uuid.v4();
+      if (!existingSubmission) await AsyncStorage.setItem(submissionKey, submissionId);
       const res = await apiFetch('/loyalty/me/redemptions', {
         method: 'POST',
-        body: JSON.stringify({ catalogItemId: redeemItem.id }),
+        body: JSON.stringify({ catalogItemId: itemId, submissionId, expectedPointsCost: redeemItem.points_cost }),
       });
       const data = await res.json();
       if (!res.ok) {
-        const msg = apiErrorMessage(data, 'Redemption failed');
-        setRedeemError(msg);
-      } else {
-        const code = data.redemption?.redemption_code as string | null | undefined;
-        setSuccessPending(!code);
-        setSuccessCode(code ?? 'Awaiting Branch Manager approval');
-        onRefresh();
+        setRedeemError(apiErrorMessage(data, 'Could not get a pickup code'));
+        if (res.status === 409) onRefresh();
+        return;
       }
-    } catch (e) {
-      setRedeemError('Network error. Please try again.');
+      const redemption: ActiveRedemption | undefined = data.redemption;
+      if (!redemption || (!redemption.redemption_code && redemption.status !== 'fulfilled')) {
+        setRedeemError('The pickup code is unavailable. Refresh your rewards and try again.');
+        return;
+      }
+      await AsyncStorage.removeItem(submissionKey);
+      setRedeemItem(null);
+      setRecentlyIssued(redemption);
+      setSelectedCode(redemption);
+      setSub('activeCodes');
+      onRefresh();
+    } catch {
+      setRedeemError('Could not finish the request. Try again to recover your pickup code.');
     } finally {
+      submitting.current = false;
       setLoading(false);
     }
+  };
+
+  const closeRedeemSheet = () => {
+    if (submitting.current) return;
+    setRedeemItem(null);
+    setRedeemError(null);
+  };
+  const renderReward = (item: CatalogItem) => {
+    const inStock = item.stock_qty > 0;
+    const affordable = item.points_cost <= availableFor(item);
+    const availability = inStock ? (affordable ? '' : 'More points needed') : 'Out of stock';
+    return (
+      <RewardCard
+        item={{ name: item.name, pts: item.points_cost, img: rewardImageFor(item.name) }}
+        detail={[item.branch_name, availability].filter(Boolean).join(' · ')}
+        onPress={inStock && affordable && !loyaltyError ? () => {
+          setRedeemError(null);
+          setRedeemItem(item);
+        } : undefined}
+      />
+    );
   };
 
   if (accountType === 'commercial') {
@@ -336,6 +402,11 @@ export function RewardsScreen({
       </View>
     );
   }
+
+  const issued = recentlyIssued && ![...activeCodes, ...recentRedemptions].some((entry) => entry.id === recentlyIssued.id)
+    ? [recentlyIssued] : [];
+  const pickupCodes = [...issued, ...activeCodes].filter((entry) => entry.status === 'approved' && entry.redemption_code);
+  const viewedCode = [...recentRedemptions, ...pickupCodes, ...issued].find((entry) => entry.id === selectedCode?.id);
 
   return (
     <View style={styles.sheet}>
@@ -359,16 +430,18 @@ export function RewardsScreen({
           ) : null}
           <Text style={styles.pointsBig}>{points} points</Text>
           <Text style={styles.blurb}>
-            Earn more points from ordering at Superkalan Gaz branches. Expect your points to reflect
-            within 24 hours. Points expire 12 months after they were earned.
+            Earn points for delivered cylinder purchases. Points expire 12 months after they are earned and can be used at the branch where you earned them.
           </Text>
 
           <View style={styles.sectionRow}>
-            <Text style={styles.sectionTitle}>Points History</Text>
-            <Pressable onPress={() => setSub('all')}>
-              <Text style={styles.link}>View All</Text>
+            <Pressable accessibilityRole="button" onPress={() => { setSub('activeCodes'); onRefresh(); }}>
+              <Text style={styles.link}>Pickup codes and history</Text>
+            </Pressable>
+            <Pressable accessibilityRole="button" onPress={() => setSub('all')}>
+              <Text style={styles.link}>View all rewards</Text>
             </Pressable>
           </View>
+          <Text style={[styles.sectionTitle, { marginTop: 12 }]}>Points History</Text>
           {history.length === 0 ? (
             <View style={{ paddingVertical: 24, alignItems: 'center' }}>
               <Text style={{ fontFamily: fonts.medium, color: colors.grayText, fontSize: 14 }}>
@@ -380,16 +453,16 @@ export function RewardsScreen({
               <View key={row.id}>
                 <View style={styles.histRow}>
                   <Feather
-                    name={row.type === 'redeem' ? 'arrow-down' : 'arrow-up'}
+                    name={row.points_delta < 0 ? 'arrow-down' : 'arrow-up'}
                     size={18}
-                    color={row.type === 'redeem' ? colors.danger : colors.greenBright}
+                    color={row.points_delta < 0 ? colors.danger : colors.greenBright}
                   />
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.histType}>{row.type === 'earn' ? 'Earned' : 'Used'}</Text>
+                    <Text style={styles.histType}>{row.type === 'earn' ? 'Earned' : row.type === 'expire' ? 'Expired' : row.type === 'redeem' ? 'Used' : 'Adjusted'}</Text>
                     <Text style={styles.histDate}>{new Date(row.created_at).toLocaleDateString()}</Text>
                   </View>
                   <Text style={styles.histPts}>
-                    {row.type === 'earn' ? '+' : '-'}{Math.abs(row.points_delta)}
+                    {row.points_delta >= 0 ? '+' : '-'}{Math.abs(row.points_delta)}
                   </Text>
                 </View>
                 {i < Math.min(history.length, 4) - 1 && <View style={styles.hair} />}
@@ -406,15 +479,7 @@ export function RewardsScreen({
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 12 }}>
               {catalog.map((item) => (
                 <View key={item.id} style={{ width: 146 }}>
-                  <RewardCard
-                    item={{ name: item.name, shortName: item.name, pts: item.points_cost, img: rewardImageFor(item.name) }}
-                    dim={item.points_cost > availableFor(item)}
-                    onPress={() => {
-                      if (item.points_cost > availableFor(item)) return;
-                      setSub('all');
-                      setRedeemItem(item);
-                    }}
-                  />
+                  {renderReward(item)}
                 </View>
               ))}
             </ScrollView>
@@ -427,7 +492,7 @@ export function RewardsScreen({
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.pad}>
           <View style={styles.titleRowBetween}>
             <View style={styles.titleRow}>
-              <Pressable onPress={() => { setSub('my'); setRedeemItem(null); setSuccessCode(null); }} hitSlop={8}>
+              <Pressable onPress={() => { setSub('my'); closeRedeemSheet(); }} hitSlop={8}>
                 <Feather name="chevron-left" size={24} color={colors.heading} />
               </Pressable>
               <Text style={styles.title}>All Rewards</Text>
@@ -443,14 +508,7 @@ export function RewardsScreen({
             <View style={styles.grid}>
               {catalog.map((item) => (
                 <View key={item.id} style={styles.gridItem}>
-                  <RewardCard
-                    item={{ name: item.name, shortName: item.name, pts: item.points_cost, img: rewardImageFor(item.name) }}
-                    dim={item.points_cost > availableFor(item)}
-                    onPress={() => {
-                      if (item.points_cost > availableFor(item)) return;
-                      setRedeemItem(item);
-                    }}
-                  />
+                  {renderReward(item)}
                 </View>
               ))}
             </View>
@@ -458,59 +516,59 @@ export function RewardsScreen({
         </ScrollView>
       )}
 
-      {/* ── Active Codes ── */}
       {sub === 'activeCodes' && (
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.pad}>
-          <View style={styles.titleRowBetween}>
-            <View style={styles.titleRow}>
-              <Pressable onPress={() => { setSub('all'); setViewCodeItem(null); setCodeConfirmed(false); }} hitSlop={8}>
-                <Feather name="chevron-left" size={24} color={colors.heading} />
-              </Pressable>
-              <Text style={styles.title}>All Rewards</Text>
-            </View>
-            <Text style={styles.title}>{points} pts</Text>
+          <View style={styles.titleRow}>
+            <Pressable accessibilityLabel="Back to My Rewards" onPress={() => setSub('my')} hitSlop={8}>
+              <Feather name="chevron-left" size={24} color={colors.heading} />
+            </Pressable>
+            <Text style={styles.title}>Pickup Codes</Text>
           </View>
-          <Text style={styles.redeemHead}>Redeem with your points</Text>
-          <View style={styles.grid}>
-            {catalog.map((item) => (
-              <View key={item.id} style={styles.gridItem}>
-                <RewardCard item={{ name: item.name, shortName: item.name, pts: item.points_cost, img: rewardImageFor(item.name) }} dim={item.points_cost > availableFor(item)} />
+          {!pickupCodes.length && <Text style={styles.blurb}>You have no rewards waiting for pickup.</Text>}
+          {pickupCodes.map((entry) => (
+            <Pressable key={entry.id} accessibilityRole="button" onPress={() => setSelectedCode(entry)} style={styles.histRow}>
+              <Feather name="gift" size={20} color={colors.primary} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.histType}>{entry.catalog_item_name}</Text>
+                <Text style={styles.blurb}>{entry.branch_name ?? 'Issuing branch'}</Text>
               </View>
-            ))}
-          </View>
-          <Text style={[styles.redeemHead, { marginTop: 24 }]}>My Active Redemptions</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 12 }}>
-            {activeCodes.map((code) => (
-              <View key={code.id} style={{ width: 146 }}>
-                <Pressable
-                  style={[styles.rewardCard, codeConfirmed && { opacity: 0.3 }]}
-                  onPress={() => !codeConfirmed && setViewCodeItem(code)}
-                >
-                  <Image source={rewardImageFor(code.catalog_item_name || '')} style={styles.rewardImg} resizeMode="contain" />
-                  <View style={styles.ptsPill}>
-                    <Text style={styles.ptsPillText}>{code.points_spent} pts</Text>
+              <Text style={styles.link}>Show code</Text>
+            </Pressable>
+          ))}
+          {recentRedemptions.length > 0 && (
+            <>
+              <Text style={[styles.sectionTitle, { marginTop: 20 }]}>Recent Redemptions</Text>
+              {recentRedemptions.map((entry) => (
+                <View key={entry.id} style={styles.histRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.histType}>{entry.catalog_item_name ?? 'Reward'}</Text>
+                    <Text style={styles.blurb}>{entry.rejected_reason ?? entry.branch_name}</Text>
                   </View>
-                  <Text style={[styles.rewardName, { color: colors.grayText }]}>Status: {code.status}</Text>
-                </Pressable>
-              </View>
-            ))}
-          </ScrollView>
+                  <Text style={styles.histPts}>{entry.status === 'fulfilled' ? 'Redeemed' : 'Closed'}</Text>
+                </View>
+              ))}
+            </>
+          )}
+          <Pressable accessibilityRole="button" onPress={onRefresh} style={{ marginTop: 16 }}>
+            <Text style={styles.link}>Refresh pickup status</Text>
+          </Pressable>
         </ScrollView>
       )}
 
       {/* Redeem confirm sheet */}
-      <Modal visible={!!redeemItem && !successCode} transparent animationType="slide" onRequestClose={() => { setRedeemItem(null); setRedeemError(null); }}>
-        <Pressable style={styles.sheetBackdrop} onPress={() => { setRedeemItem(null); setRedeemError(null); }} />
+      <Modal visible={!!redeemItem} transparent animationType="slide" onRequestClose={closeRedeemSheet}>
+        <Pressable style={styles.sheetBackdrop} onPress={closeRedeemSheet} />
         <View style={styles.bottomSheet}>
           <View style={styles.sheetHead}>
             <Text style={styles.sheetTitle}>{redeemItem?.name}</Text>
-            <Pressable onPress={() => { setRedeemItem(null); setRedeemError(null); }} hitSlop={8}>
+            <Pressable onPress={closeRedeemSheet} hitSlop={8}>
               <Feather name="x" size={18} color={colors.gray} />
             </Pressable>
           </View>
           <View style={[styles.ptsPill, { alignSelf: 'flex-start', marginBottom: 20 }]}>
             <Text style={styles.ptsPillText}>{redeemItem?.points_cost} pts</Text>
           </View>
+          {!!redeemItem?.branch_name && <Text style={styles.blurb}>Pickup at {redeemItem.branch_name}</Text>}
           {redeemError ? (
             <View style={{ backgroundColor: '#FEF2F2', borderRadius: 8, padding: 12, marginBottom: 16, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
               <Feather name="alert-circle" size={16} color={colors.danger} />
@@ -523,50 +581,21 @@ export function RewardsScreen({
         </View>
       </Modal>
 
-      {/* Redeem success */}
-      <Modal visible={!!successCode} transparent animationType="fade">
+      <Modal visible={!!viewedCode} transparent animationType="fade" onRequestClose={() => setSelectedCode(null)}>
         <View style={styles.centerBackdrop}>
           <View style={styles.successCard}>
-            <Pressable
-              style={styles.successClose}
-              onPress={() => { setRedeemItem(null); setSuccessCode(null); setSuccessPending(false); setSub('activeCodes'); }}
-              hitSlop={8}
-            >
-              <Feather name="x" size={18} color={colors.grayText} />
-            </Pressable>
-            <View style={styles.successCircle}>
-              <Feather name="check" size={44} color="#fff" />
-            </View>
-            <Text style={styles.successTitle}>{successPending ? 'Request Submitted' : 'Reward Approved!'}</Text>
-            <Text style={styles.successCode}>{successCode}</Text>
-            <Text style={styles.successNote}>
-              {successPending
-                ? 'A redemption code will be issued after Branch Manager approval.'
-                : 'To claim your reward, show this code at the issuing Superkalan Gaz branch.'}
-            </Text>
-          </View>
-        </View>
-      </Modal>
-
-      {/* View code sheet */}
-      <Modal visible={!!viewCodeItem} transparent animationType="slide" onRequestClose={() => setViewCodeItem(null)}>
-        <Pressable style={styles.sheetBackdrop} onPress={() => setViewCodeItem(null)} />
-        <View style={styles.bottomSheet}>
-          <View style={styles.sheetHead}>
-            <View>
-              <Text style={styles.sheetTitle}>{viewCodeItem?.catalog_item_name}</Text>
-              <Text style={styles.codeBig}>{viewCodeItem?.redemption_code || '—'}</Text>
-            </View>
-            <Pressable onPress={() => setViewCodeItem(null)} hitSlop={8}>
-              <Feather name="x" size={18} color={colors.gray} />
+            <Text style={styles.successTitle}>{viewedCode?.status === 'fulfilled' ? 'Redeemed' : 'Ready for Pickup'}</Text>
+            <Text style={styles.successNote}>{viewedCode?.catalog_item_name}</Text>
+            {viewedCode?.status === 'approved' && (
+              <>
+                <Text style={styles.successCode} selectable>{viewedCode.redemption_code}</Text>
+                <Text style={styles.successNote}>Show this code to the Branch Manager at {viewedCode.branch_name ?? 'the issuing branch'}.</Text>
+              </>
+            )}
+            <Pressable accessibilityRole="button" onPress={() => setSelectedCode(null)} style={{ marginTop: 16 }}>
+              <Text style={styles.link}>Done</Text>
             </Pressable>
           </View>
-          <View style={[styles.ptsPill, { alignSelf: 'flex-start', marginBottom: 20 }]}>
-            <Text style={styles.ptsPillText}>{viewCodeItem?.points_spent} pts</Text>
-          </View>
-          <Pressable style={styles.solidBtn} onPress={() => { setViewCodeItem(null); setCodeConfirmed(true); }}>
-            <Text style={styles.solidBtnText}>DONE</Text>
-          </Pressable>
         </View>
       </Modal>
     </View>
@@ -605,6 +634,8 @@ const styles = StyleSheet.create({
   ptsPill: { borderWidth: 1, borderColor: colors.primary, borderRadius: radii.card, paddingHorizontal: 12, paddingVertical: 2, marginBottom: 8 },
   ptsPillText: { fontFamily: fonts.medium, fontSize: 10, color: colors.label },
   rewardName: { fontFamily: fonts.semibold, fontSize: 9, color: colors.label, textAlign: 'center' },
+
+  rewardDetail: { fontFamily: fonts.regular, fontSize: 10, color: colors.grayText, textAlign: 'center', marginTop: 4 },
 
   errorBanner: {
     flexDirection: 'row',
@@ -741,14 +772,11 @@ const styles = StyleSheet.create({
   bottomSheet: { backgroundColor: '#fff', borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingHorizontal: 24, paddingTop: 24, paddingBottom: 40 },
   sheetHead: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 12 },
   sheetTitle: { fontFamily: fonts.semibold, fontSize: 20, color: colors.heading, flexShrink: 1 },
-  codeBig: { fontFamily: fonts.semibold, fontSize: 32, color: colors.heading, marginTop: 4 },
   solidBtn: { backgroundColor: colors.primary, borderRadius: radii.card, paddingVertical: 12, alignItems: 'center' },
   solidBtnText: { fontFamily: fonts.semibold, fontSize: 15, color: '#fff' },
 
   centerBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.3)', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24 },
   successCard: { width: 320, backgroundColor: '#fff', borderRadius: radii.card, paddingHorizontal: 24, paddingVertical: 32, alignItems: 'center' },
-  successClose: { position: 'absolute', top: 12, right: 12 },
-  successCircle: { width: 120, height: 120, borderRadius: 60, backgroundColor: colors.green, alignItems: 'center', justifyContent: 'center', marginBottom: 16 },
   successTitle: { fontFamily: fonts.bold, fontSize: 20, color: colors.primary, marginBottom: 4 },
   successCode: { fontFamily: fonts.semibold, fontSize: 20, color: colors.primary, marginBottom: 12 },
   successNote: { fontFamily: fonts.semibold, fontSize: 10, color: colors.primary, textAlign: 'center' },

@@ -46,12 +46,14 @@ import { OrderProgressTracker } from '@/components/orders/OrderProgressTracker';
  * Greeting, Service Request milestones, and the account's track-specific loyalty
  * summary are loaded from the authenticated session and NestJS API.
  */
-type LoyaltyCatalogItem = { id: string; branch_id: string; name: string; points_cost: number };
+type LoyaltyCatalogItem = { id: string; branch_id: string; branch_name: string | null; name: string; points_cost: number; stock_qty: number };
 type HouseholdAccountRow = { branch_id: string; points_balance: number };
 type HouseholdHistoryRow = { id: string; type: string; points_delta: number; created_at: string };
 type LoyaltyRedemptionRow = {
   id: string;
   catalog_item_name: string | null;
+  branch_name: string | null;
+  rejected_reason: string | null;
   points_spent: number | null;
   redemption_code: string | null;
   status: string;
@@ -76,17 +78,8 @@ type CustomerLoyaltyPayload = {
   commercial_accounts?: CommercialAccountRow[];
   commercial_purchases?: CommercialPurchaseRow[];
   active_redemptions?: LoyaltyRedemptionRow[];
+  recent_redemptions?: LoyaltyRedemptionRow[];
 };
-
-function uniqueCatalogItems(items: LoyaltyCatalogItem[]): LoyaltyCatalogItem[] {
-  const seen = new Set<string>();
-  return items.filter((item) => {
-    const key = `${item.branch_id}:${item.name.trim().toLocaleLowerCase()}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
 
 function requestFailureMessage(label: string, reason: unknown): string {
   if (reason instanceof Error && reason.message.includes('session expired')) {
@@ -166,6 +159,7 @@ export function HomeScreen({
   const [history, setHistory] = useState<HouseholdHistoryRow[]>([]);
   const [householdAccounts, setHouseholdAccounts] = useState<HouseholdAccountRow[]>([]);
   const [activeCodes, setActiveCodes] = useState<LoyaltyRedemptionRow[]>([]);
+  const [recentRedemptions, setRecentRedemptions] = useState<LoyaltyRedemptionRow[]>([]);
   const [commercialAccounts, setCommercialAccounts] = useState<CommercialAccountRow[]>([]);
   const [commercialPurchases, setCommercialPurchases] = useState<CommercialPurchaseRow[]>([]);
   const [loyaltyError, setLoyaltyError] = useState<string | null>(null);
@@ -185,7 +179,7 @@ export function HomeScreen({
 
       if (catResult.status === 'fulfilled' && catResult.value.ok) {
         const catData = (await catResult.value.json()) as { catalogItems?: LoyaltyCatalogItem[] };
-        setCatalog(uniqueCatalogItems(catData.catalogItems ?? []));
+        setCatalog(catData.catalogItems ?? []);
       } else if (catResult.status === 'fulfilled') {
         errors.push(`Catalog ${catResult.value.status}`);
       } else {
@@ -200,6 +194,7 @@ export function HomeScreen({
         setCommercialAccounts(meData.commercial_accounts ?? []);
         setCommercialPurchases(meData.commercial_purchases ?? []);
         setActiveCodes(meData.active_redemptions ?? []);
+        setRecentRedemptions(meData.recent_redemptions ?? []);
       } else if (meResult.status === 'fulfilled') {
         errors.push(`Rewards ${meResult.value.status}`);
       } else {
@@ -463,6 +458,7 @@ export function HomeScreen({
             history={history}
             householdAccounts={householdAccounts}
             activeCodes={activeCodes}
+            recentRedemptions={recentRedemptions}
             commercialAccounts={commercialAccounts}
             commercialPurchases={commercialPurchases}
             loyaltyError={loyaltyError}
