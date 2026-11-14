@@ -472,6 +472,10 @@ export function OrderProcessScreen({ onNavigate, initialOrderId, onOrderPlaced }
   );
   const totalQty = selectedProducts.reduce((sum, item) => sum + item.quantity, 0);
   const typeCount = selectedProducts.length;
+  const estimatedLoyaltyPoints = selectedProducts.reduce(
+    (sum, { product, quantity }) => sum + (CYLINDER_POINTS[product.id] ?? 0) * quantity,
+    0,
+  );
 
   // ETA: anchored to the time the order was placed (or dispatched_at from backend).
   // On summary screen (before placing), shows now+15..30.
@@ -583,7 +587,7 @@ export function OrderProcessScreen({ onNavigate, initialOrderId, onOrderPlaced }
         return;
       }
     }
-    if (!selectedBranch || !address || !selectedProducts[0] || !session?.user) {
+    if (!selectedBranch || !address || selectedProducts.length === 0 || !session?.user) {
       showToast('Select a branch, address, and cylinder first.');
       return;
     }
@@ -600,8 +604,7 @@ export function OrderProcessScreen({ onNavigate, initialOrderId, onOrderPlaced }
         customerName,
         customerContact: normalizedContact,
         deliveryAddress: address.address,
-        cylinderSize: selectedProducts[0].product.id,
-        quantity: selectedProducts[0].quantity,
+        items: selectedProducts.map(({ product, quantity }) => ({ cylinderSize: product.id, quantity })),
         paymentMethod: payment === 'paymongo' ? 'PayMongo' : 'Cash on Delivery',
       };
       const response = await apiFetch('/service-requests/customer', {
@@ -1514,7 +1517,7 @@ export function OrderProcessScreen({ onNavigate, initialOrderId, onOrderPlaced }
 
       <Text style={styles.sumSection}>Cost & Loyalty Rewards</Text>
       {summaryRow('Estimated Cost:', `₱ ${total.toLocaleString()}`)}
-      {summaryRow('Loyalty Points:', `+${(CYLINDER_POINTS[selectedProducts[0]?.product.id ?? ''] ?? 0) * (selectedProducts[0]?.quantity ?? 1)} pts`, colors.greenBright)}
+      {summaryRow('Loyalty Points:', `+${estimatedLoyaltyPoints} pts`, colors.greenBright)}
       <View style={styles.hair} />
 
       <Pressable

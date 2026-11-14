@@ -1,3 +1,4 @@
+import { cylinderSummary, type ServiceRequestItem } from '@/lib/serviceRequestItems';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AccessibilityInfo,
@@ -126,6 +127,7 @@ export function HomeScreen({
     id: string;
     status: string;
     cylinder_size: string;
+    items?: ServiceRequestItem[];
     quantity: number;
     created_at: string;
   };
@@ -591,7 +593,7 @@ export function HomeScreen({
                           style={styles.activeCylinder}
                           resizeMode="contain"
                         />
-                        <Text style={styles.activeProductText}>{activeOrder.cylinder_size.toUpperCase()} × {activeOrder.quantity}</Text>
+                        <Text style={styles.activeProductText}>{cylinderSummary(activeOrder)}</Text>
                       </View>
                       <Text style={styles.activeStatus}>
                         {activeProgress.label}

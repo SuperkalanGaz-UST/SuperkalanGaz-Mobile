@@ -1,3 +1,4 @@
+import { cylinderSummary } from '@/lib/serviceRequestItems';
 import {
   Modal,
   Pressable,
@@ -57,7 +58,7 @@ function AssignmentDetails({ assignment }: { assignment: DeliveryAssignment | De
       <DetailRow icon="hash" label="Service Request" value={assignment.srCode} />
       <DetailRow icon="user" label="Customer" value={assignment.customerName} />
       <DetailRow icon="map-pin" label="Customer address" value={assignment.deliveryAddress} />
-      <DetailRow icon="box" label="Order" value={`${assignment.quantity} × ${assignment.cylinderSize}`} />
+      <DetailRow icon="box" label="Order" value={cylinderSummary({ ...assignment, cylinder_size: assignment.cylinderSize })} />
       <DetailRow icon="truck" label="Assigned vehicle" value={assignment.vehicleLabel} />
     </View>
   );
@@ -69,7 +70,7 @@ function OfferDetails({ assignment }: { assignment: DeliveryOffer['assignment'] 
       <DetailRow icon="hash" label="Service Request" value={assignment.srCode} />
       <DetailRow icon="user" label="Customer" value={assignment.customerName} />
       <DetailRow icon="map-pin" label="Customer address" value={assignment.deliveryAddress} />
-      <DetailRow icon="box" label="Order" value={`${assignment.quantity} × ${assignment.cylinderSize}`} />
+      <DetailRow icon="box" label="Order" value={cylinderSummary({ ...assignment, cylinder_size: assignment.cylinderSize })} />
       <DetailRow icon="clock" label="Requested" value={dateTime(assignment.requestedAt)} />
     </View>
   );

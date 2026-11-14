@@ -1,3 +1,4 @@
+import type { ServiceRequestItem } from './serviceRequestItems';
 import { Platform } from 'react-native';
 import { apiErrorMessage, apiFetch } from '@/lib/api';
 
@@ -33,6 +34,7 @@ export interface DeliveryAssignment {
   deliveryAddress: string;
   cylinderSize: string;
   quantity: number;
+  items?: ServiceRequestItem[];
   vehicleLabel: string;
   requestedAt: string;
   dispatchedAt: string;

@@ -1,3 +1,4 @@
+import { serviceRequestItems, type ServiceRequestCylinderFields } from '@/lib/serviceRequestItems';
 import { type Ref, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Image,
@@ -30,14 +31,12 @@ import type { MainNavigateOptions, MainScreen } from '@/navigation/types';
  */
 type Sub = 'list' | 'details';
 
-type OrderRow = {
+type OrderRow = ServiceRequestCylinderFields & {
   id: string;
   branch_id: string;
   status: 'Pending' | 'Dispatched' | 'En Route' | 'Delivered' | 'Completed' | 'Cancelled' | 'Under Review';
   customer_name: string;
   delivery_address: string;
-  cylinder_size: string;
-  quantity: number;
   requested_at: string;
   dispatched_at: string | null;
   delivered_at: string | null;
@@ -195,8 +194,9 @@ export function OrdersScreen({ onNavigate, activeOrdersRef }: {
       <View style={styles.orderBody}>
         <Image source={cylinderFor(o.cylinder_size)} style={styles.orderCyl} resizeMode="contain" />
         <View style={styles.orderInfo}>
-          <Text style={styles.cylSize}>{o.cylinder_size.toUpperCase()}</Text>
-          <Text style={styles.cylQty}>Qty: {o.quantity}</Text>
+          {serviceRequestItems(o).map(item => (
+            <Text key={item.cylinder_size} style={styles.cylSize}>{item.quantity} × {item.cylinder_size}</Text>
+          ))}
           <Text style={styles.cylPrice}>{formatMoney(o.total_amount)}</Text>
           <Text style={styles.orderStatus}>Status: {o.status}</Text>
           <Text style={styles.orderStatus}>
@@ -346,8 +346,9 @@ export function OrdersScreen({ onNavigate, activeOrdersRef }: {
       <View style={styles.productCard}>
         <Image source={cylinderFor(detailOrder?.cylinder_size ?? '11 KG')} style={{ width: 82, height: 120, marginHorizontal: 24 }} resizeMode="contain" />
         <View style={styles.productInfo}>
-          <Text style={styles.productSize}>{detailOrder?.cylinder_size ?? '11 KG'}</Text>
-          <Text style={styles.cylQty}>Qty: {detailOrder?.quantity ?? 1}</Text>
+          {detailOrder && serviceRequestItems(detailOrder).map(item => (
+            <Text key={item.cylinder_size} style={styles.productSize}>{item.quantity} × {item.cylinder_size}</Text>
+          ))}
           <Text style={styles.productPrice}>{formatMoney(detailOrder?.total_amount ?? null)}</Text>
         </View>
       </View>
