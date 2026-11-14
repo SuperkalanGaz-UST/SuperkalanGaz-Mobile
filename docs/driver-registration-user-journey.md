@@ -33,19 +33,14 @@ remains authoritative for vehicle geofencing and PMS.
    their role-gated navigation and initially appears in that branch's Fleet roster as
    **Offline** and **No vehicle assigned**. Invitation acceptance
    does not automatically create, transfer, or assign a vehicle.
-8. **Become dispatch-ready.** The Branch Manager assigns one registered, healthy branch
-   vehicle. Before the Delivery Rider can set **Available**, mobile requests when-in-use
-   location permission. While Available or On Delivery, the foreground app sends operational
-   phone location to the branch-scoped NestJS API. Only an activated Delivery Rider with a
-   valid same-branch vehicle assignment can receive an order offer.
-9. **Accept an order offer.** The Branch Manager offers a pending Service Request to that
-    Delivery Rider. They see only the specifically assigned offer and may accept or decline.
-    Acceptance is atomic: the API rechecks the request and Delivery Rider, stamps `dispatched_at`,
-    and changes the Delivery Rider to **On Delivery**. A rejection or expired offer leaves the
-    request undispatched for reassignment.
-10. **Update delivery milestones.** The Delivery Rider records **In Transit** and **Delivered** from
-    the app. These actions stamp `in_transit_at` and `delivered_at`; delivery returns the
-    Delivery Rider to **Available** when the assigned vehicle is not maintenance-blocked.
+8. **Go Available.** Allow foreground location access to receive delivery offers.
+   The Delivery Rider can go Available before a motorcycle is assigned.
+9. **Accept an order offer.** The Branch Manager sends the Service Request. On acceptance,
+   the API matches an eligible motorcycle using GPS. When prompted, the Delivery Rider
+   selects the plate on the motorcycle they are using. The API commits the assignment,
+   stamps `dispatched_at`, and sets **On Delivery** together.
+10. **Update delivery milestones.** The Delivery Rider records **In Transit** and **Delivered**.
+    Completion releases the motorcycle and returns the Delivery Rider to **Available**.
 
 ## What the Branch Manager sees
 
@@ -54,12 +49,12 @@ remains authoritative for vehicle geofencing and PMS.
 | Branch Owner invitation sent | Pending invitations +1; not counted in Total Delivery Riders | No change |
 | Invitation accepted | Total Delivery Riders +1; roster row appears as Offline | No automatic vehicle creation or assignment |
 | Vehicle assigned | Roster shows the branch vehicle and readiness | Existing vehicle shows the assigned Delivery Rider |
-| Delivery Rider goes Available | Delivery Rider becomes dispatch-eligible and counts in Active Now | Vehicle must still be Healthy |
+| Delivery Rider goes Available | Delivery Rider can receive offers and counts in Active Now | Motorcycle can be assigned on acceptance |
 | Foreground phone location updates | Branch Manager dispatch receives the latest operational location/freshness | No change to vehicle geofence or PMS telemetry |
 | Offer accepted | Status becomes On Delivery; activity log records acceptance | Assigned vehicle is shown as in use |
 | Delivery Rider leaves geofence | Alert is derived from SinoTrack ST-901 data received through Traccar | Vehicle remains the tracked asset |
-| Delivery completed | Activity and SLA timestamps update; Delivery Rider returns to Available if eligible | Vehicle becomes available for its next assignment |
-| Delivery Rider deactivated | Delivery Rider is removed from the assignable pool but retained in history | Vehicle is unassigned by an explicit Branch Manager action |
+| Delivery completed | Activity and SLA timestamps update and the Delivery Rider returns to Available | Motorcycle is released for its next assignment |
+| Delivery Rider deactivated | Delivery Rider is removed from the offer pool and retained in history | Active deliveries must be completed or reassigned first |
 
 For the current Fleet screen, standardize the user-facing labels to **Total Delivery Riders**,
 **Delivery Rider Roster**, and **Delivery Rider**. Add a **Pending Invitations** count or

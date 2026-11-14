@@ -6,6 +6,7 @@ import { colors } from '@/theme/colors';
 import { fonts } from '@/theme/fonts';
 import { navShadow } from '@/theme/metrics';
 import { images } from '@/lib/assets';
+import { useActiveOrderCount } from '@/hooks/useActiveOrderCount';
 import type { MainScreen, MainTab } from '@/navigation/types';
 
 type FeatherName = keyof typeof Feather.glyphMap;
@@ -31,22 +32,36 @@ export function BottomNav({
   guideRef?: Ref<ViewInstance>;
 }) {
   const insets = useSafeAreaInsets();
+  const activeOrderCount = useActiveOrderCount();
   const left = TABS.slice(0, 2);
   const right = TABS.slice(2);
 
   const renderTab = (t: (typeof TABS)[number]) => {
     const on = active === t.key;
     const color = on ? colors.primary : colors.navInactive;
+    // History shows a red count bubble while the customer has orders in progress.
+    const badge = t.key === 'orders' && activeOrderCount > 0
+      ? (activeOrderCount > 9 ? '9+' : String(activeOrderCount))
+      : null;
     return (
       <Pressable
         key={t.key}
         accessibilityRole="button"
-        accessibilityLabel={t.label}
+        accessibilityLabel={badge
+          ? `${t.label}, ${activeOrderCount} active ${activeOrderCount === 1 ? 'order' : 'orders'}`
+          : t.label}
         accessibilityState={{ selected: on }}
         style={styles.tab}
         onPress={() => onNavigate(t.screen, { tab: t.key })}
       >
-        <Feather name={t.icon} size={20} color={color} />
+        <View>
+          <Feather name={t.icon} size={20} color={color} />
+          {badge && (
+            <View testID="history-badge" style={styles.badge}>
+              <Text style={styles.badgeText}>{badge}</Text>
+            </View>
+          )}
+        </View>
         <Text style={[styles.tabLabel, { color, fontFamily: on ? fonts.bold : fonts.regular }]}>
           {t.label}
         </Text>
@@ -89,8 +104,23 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     ...navShadow,
   },
-  tab: { alignItems: 'center', gap: 3, width: 64 },
+  tab: { flex: 1, minWidth: 0, minHeight: 44, justifyContent: 'center', alignItems: 'center', gap: 3 },
   tabLabel: { fontSize: 10 },
+  badge: {
+    position: 'absolute',
+    top: -6,
+    right: -10,
+    minWidth: 17,
+    height: 17,
+    paddingHorizontal: 4,
+    borderRadius: 9,
+    borderWidth: 1.5,
+    borderColor: colors.navBarFill,
+    backgroundColor: colors.danger,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  badgeText: { fontFamily: fonts.bold, fontSize: 9, lineHeight: 11, color: '#fff' },
   fabSlot: { width: 58 },
   fabAction: {
     position: 'absolute',

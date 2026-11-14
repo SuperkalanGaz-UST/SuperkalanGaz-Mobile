@@ -123,7 +123,7 @@ export function ProfileScreen({
 
   return (
     <View style={styles.flex}>
-      <AppHeader />
+      <AppHeader style={styles.header} />
 
       <ScrollView
         style={styles.sheet}
@@ -150,7 +150,7 @@ export function ProfileScreen({
             </View>
           </View>
           <Text style={styles.bannerName}>{fullName}</Text>
-          <Text style={styles.bannerId} numberOfLines={1}>CUSTOMER ID: {session?.user.id ?? 'Unavailable'}</Text>
+          <Text style={styles.bannerId}>CUSTOMER ID: {session?.user.id ?? 'Unavailable'}</Text>
         </View>
 
         {/* Sub-tabs */}
@@ -295,20 +295,21 @@ export function ProfileScreen({
 
 const styles = StyleSheet.create({
   flex: { flex: 1, backgroundColor: '#fff' },
-  sheet: { flex: 1, backgroundColor: '#fff', borderTopLeftRadius: 24, borderTopRightRadius: 24, marginTop: -24 },
+  header: { paddingBottom: 14 },
+  sheet: { flex: 1, backgroundColor: '#fff' },
 
-  banner: { marginHorizontal: 16, marginTop: 16, borderRadius: 20, backgroundColor: colors.primary, alignItems: 'center', paddingVertical: 16 },
-  avatarWrap: { marginTop: 8 },
-  avatar: { width: 90, height: 90, borderRadius: 45, backgroundColor: colors.avatarGray, alignItems: 'center', justifyContent: 'center', borderWidth: 3, borderColor: colors.border, overflow: 'hidden' },
+  banner: { backgroundColor: colors.primary, alignItems: 'center', paddingHorizontal: 16, paddingTop: 8, paddingBottom: 18 },
+  avatarWrap: { position: 'relative' },
+  avatar: { width: 76, height: 76, borderRadius: 38, backgroundColor: colors.avatarGray, alignItems: 'center', justifyContent: 'center', borderWidth: 3, borderColor: colors.border, overflow: 'hidden' },
   avatarImage: { width: '100%', height: '100%' },
   avatarInitials: { fontFamily: fonts.semibold, fontSize: 28, color: '#fff' },
   cameraBadge: { position: 'absolute', bottom: 0, right: 0, width: 28, height: 28, borderRadius: 14, backgroundColor: colors.primary, borderWidth: 2, borderColor: '#fff', alignItems: 'center', justifyContent: 'center' },
-  bannerName: { fontFamily: fonts.bold, fontSize: 18, color: '#fff', marginTop: 8 },
-  bannerId: { fontFamily: fonts.regular, fontSize: 10, color: colors.navInactive, marginTop: 2 },
+  bannerName: { fontFamily: fonts.bold, fontSize: 18, color: '#fff', marginTop: 8, textAlign: 'center' },
+  bannerId: { fontFamily: fonts.regular, fontSize: 10, color: '#fff', marginTop: 2, textAlign: 'center' },
 
   tabsWrap: { paddingHorizontal: 24, marginTop: 16 },
-  tabItem: { flex: 1, alignItems: 'center', paddingBottom: 8 },
-  tabText: { fontFamily: fonts.semibold, fontSize: 11 },
+  tabItem: { flex: 1, minHeight: 44, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4 },
+  tabText: { fontFamily: fonts.semibold, fontSize: 11, textAlign: 'center' },
   tabTrack: { height: 1, backgroundColor: colors.divider },
   tabUnderline: { position: 'absolute', top: 0, height: 2, width: '50%', backgroundColor: colors.primary },
 

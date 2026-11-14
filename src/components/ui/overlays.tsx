@@ -1,10 +1,65 @@
-import { Image, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useEffect, useState, type ReactNode } from 'react';
+import { AccessibilityInfo, Animated, Easing, Image, Modal, Platform, Pressable, StyleSheet, Text, View, useWindowDimensions, type StyleProp, type ViewStyle } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { colors } from '@/theme/colors';
 import { fonts } from '@/theme/fonts';
 import { radii } from '@/theme/metrics';
 import { images } from '@/lib/assets';
 import { Mascot } from './Mascot';
+
+export function BottomSheetModal({ visible, onClose, style, testID, children }: {
+  visible: boolean;
+  onClose: () => void;
+  style: StyleProp<ViewStyle>;
+  testID: string;
+  children: ReactNode;
+}) {
+  const [retained, setRetained] = useState(visible);
+  if (visible && !retained) setRetained(true);
+  const [progress] = useState(() => new Animated.Value(0));
+  const [reduceMotion, setReduceMotion] = useState(false);
+  const { height } = useWindowDimensions();
+
+  useEffect(() => {
+    let active = true;
+    void AccessibilityInfo.isReduceMotionEnabled().then(value => { if (active) setReduceMotion(value); });
+    const subscription = AccessibilityInfo.addEventListener('reduceMotionChanged', setReduceMotion);
+    return () => { active = false; subscription.remove(); };
+  }, []);
+
+  useEffect(() => {
+    if (!retained) return;
+    const animation = Animated.timing(progress, {
+      toValue: visible ? 1 : 0,
+      duration: reduceMotion ? 0 : visible ? 260 : 200,
+      easing: visible ? Easing.out(Easing.cubic) : Easing.in(Easing.quad),
+      useNativeDriver: Platform.OS !== 'web',
+    });
+    // Start after the modal host mounts so the opening motion is visible.
+    const frame = requestAnimationFrame(() => animation.start(({ finished }) => {
+      if (finished && !visible) setRetained(false);
+    }));
+    return () => { cancelAnimationFrame(frame); animation.stop(); };
+  }, [retained, progress, reduceMotion, visible]);
+
+  return (
+    <Modal visible={retained} transparent animationType="none" onRequestClose={onClose}>
+      <View style={styles.sheetRoot}>
+        <Animated.View testID={`${testID}-backdrop`} style={[styles.sheetScrim, { opacity: progress }]}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessible={false} />
+        </Animated.View>
+        <Animated.View
+          testID={`${testID}-panel`}
+          accessibilityViewIsModal
+          pointerEvents={visible ? 'auto' : 'none'}
+          style={[style, { transform: [{ translateY: progress.interpolate({ inputRange: [0, 1], outputRange: [height, 0] }) }] }]}
+        >
+          {children}
+        </Animated.View>
+      </View>
+    </Modal>
+  );
+}
 
 /* ─────────────────────────────────────────────
    Log-out confirmation
@@ -92,6 +147,8 @@ export function Toast({ message }: { message: string }) {
 }
 
 const styles = StyleSheet.create({
+  sheetRoot: { flex: 1, justifyContent: 'flex-end', overflow: 'hidden' },
+  sheetScrim: { ...StyleSheet.absoluteFill, backgroundColor: 'rgba(0,0,0,0.3)' },
   centerBackdrop: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.4)',

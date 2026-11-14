@@ -210,6 +210,7 @@ and [authentication flows](https://reactnavigation.org/docs/auth-flow/).
 To verify an exported browser build using mocked Auth/API services:
 
 ```bash
+npx playwright install chromium webkit
 npm run build:web
 npm run test:routing:browser
 ```

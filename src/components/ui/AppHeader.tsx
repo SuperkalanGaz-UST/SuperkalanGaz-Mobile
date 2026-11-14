@@ -1,5 +1,5 @@
 import { type Ref, useState } from 'react';
-import { Image, Modal, Pressable, StyleSheet, Text, View, type ViewInstance } from 'react-native';
+import { Image, Modal, Pressable, StyleSheet, Text, View, type StyleProp, type ViewInstance, type ViewStyle } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@/contexts/AuthContext';
@@ -117,12 +117,14 @@ export function AppHeader({
   onHelp,
   onProfile,
   helpRef,
+  style,
   variant = 'default',
 }: {
   onHelp?: () => void;
   onProfile?: () => void;
   /** Ref on the help (?) icon, so the app guide can spotlight it. */
   helpRef?: Ref<ViewInstance>;
+  style?: StyleProp<ViewStyle>;
   variant?: 'default' | 'home';
 }) {
   const insets = useSafeAreaInsets();
@@ -138,9 +140,10 @@ export function AppHeader({
         styles.header,
         variant === 'home' && styles.homeHeader,
         { paddingTop: insets.top + (variant === 'home' ? 10 : 20) },
+        style,
       ]}
     >
-      <View>
+      <View style={styles.greeting}>
         <Text style={[styles.hello, variant === 'home' && styles.homeHello]}>
           Hello,{' '}
           <Text style={[styles.helloName, variant === 'home' && styles.homeHelloName]}>
@@ -172,6 +175,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   homeHeader: { paddingBottom: 40 },
+  greeting: { flex: 1, marginRight: 8 },
   hello: { fontFamily: fonts.bold, fontSize: 24, color: '#fff' },
   homeHello: { fontSize: 24 },
   helloName: { color: colors.helloAccent },

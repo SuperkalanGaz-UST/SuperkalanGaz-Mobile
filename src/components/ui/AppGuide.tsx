@@ -14,6 +14,7 @@ import {
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Defs, Mask, Rect } from 'react-native-svg';
+import { useVisibleViewport } from '@/hooks/useVisibleViewport';
 import { colors } from '@/theme/colors';
 import { fonts } from '@/theme/fonts';
 import { Mascot, type MascotPose } from './Mascot';
@@ -35,7 +36,6 @@ export const GUIDE_STEPS: readonly Step[] = [
 
 const PAD = 6;
 const GAP = 16;
-const MASCOT_RISE = 100;
 export const GUIDE_TRANSITION_DURATION = 310;
 const CONTENT_TRANSITION_DURATION = 180;
 const AnimatedRect = Animated.createAnimatedComponent(Rect);
@@ -52,6 +52,7 @@ export function AppGuideOverlay({ visible, step, rect, pageReady, reduceMotion, 
 }) {
   const window = useWindowDimensions();
   const insets = useSafeAreaInsets();
+  const visibleViewport = useVisibleViewport(visible);
   const overlayRef = useRef<ViewInstance>(null);
   const [viewport, setViewport] = useState<GuideRect | null>(null);
   const [cardHeight, setCardHeight] = useState(190);
@@ -68,29 +69,40 @@ export function AppGuideOverlay({ visible, step, rect, pageReady, reduceMotion, 
   const data = GUIDE_STEPS[step] ?? GUIDE_STEPS[0];
   const previous = visible && !reduceMotion && content.previous !== null ? GUIDE_STEPS[content.previous] : null;
   const outgoingOpacity = contentProgress.interpolate({ inputRange: [0, 1], outputRange: [1, 0] });
-  const { width, height, x, y } = viewport ?? { width: window.width, height: window.height, x: 0, y: 0 };
-  const safeTop = Math.max(0, insets.top - y);
-  const safeBottom = Math.min(height, window.height - insets.bottom - y);
-  const left = rect ? Math.max(2, rect.x - x - PAD) : width / 2;
+  const windowBounds = { width: window.width, height: window.height, x: 0, y: 0 };
+  const { width, height, x, y } = viewport ?? windowBounds;
+  const boundary = visibleViewport ?? windowBounds;
+  const safeTop = Math.max(0, boundary.y + insets.top - y);
+  const safeBottom = Math.min(height, boundary.y + boundary.height - insets.bottom - y);
+  const leftInset = Math.max(0, boundary.x + insets.left - x);
+  const rightInset = Math.max(0, x + width - (boundary.x + boundary.width) + insets.right);
+  const safeHeight = Math.max(0, safeBottom - safeTop);
+  const compact = safeHeight < 520;
+  const mascotRise = compact ? Math.min(56, Math.round(safeHeight * 0.13)) : 96;
+  const mascotHeight = mascotRise + 16;
+  const cardGutter = compact ? 12 : 16;
+  const usableWidth = width - leftInset - rightInset;
+  const cardWidth = Math.min(480, Math.max(0, usableWidth - cardGutter * 2));
+  const cardLeft = leftInset + (usableWidth - cardWidth) / 2;
+  const left = rect ? Math.max(leftInset + 2, rect.x - x - PAD) : width / 2;
   const top = rect ? Math.max(safeTop + 2, rect.y - y - PAD) : height / 2;
-  const right = rect ? Math.min(width - 2, rect.x - x + rect.width + PAD) : left;
-  const bottom = rect ? Math.min(safeBottom, height - 2, rect.y - y + rect.height + PAD) : top;
+  const right = rect ? Math.min(width - rightInset - 2, rect.x - x + rect.width + PAD) : left;
+  const bottom = rect ? Math.min(safeBottom - 2, rect.y - y + rect.height + PAD) : top;
 
-  const minCardY = safeTop + GAP + MASCOT_RISE;
+  const minCardY = safeTop + mascotRise + GAP;
   const maxCardY = safeBottom - GAP - cardHeight;
-  const defaultCardY = safeBottom - 100 - cardHeight;
-  const cardY = Math.max(minCardY, Math.min(maxCardY, rect?.target === 'nav'
-    ? Math.min(defaultCardY, top - GAP - cardHeight)
-    : Math.max(defaultCardY, rect ? bottom + GAP + MASCOT_RISE : minCardY)));
-  // Reserve room for the whole card and its mascot. On short screens the hole
-  // may show only the leading part of a tall target, keeping the controls clear.
+  const defaultCardY = maxCardY - (safeHeight < 620 ? 0 : 36);
+  const preferredCardY = rect?.target === 'nav' ? Math.min(defaultCardY, top - GAP - cardHeight) : defaultCardY;
+  const cardY = Math.max(Math.min(minCardY, maxCardY), preferredCardY);
+  // Leave room for the controls and show as much of the live target as fits.
   const holeTop = rect?.target === 'nav' ? Math.max(top, cardY + cardHeight + GAP) : top;
-  const holeBottom = rect?.target === 'nav' ? bottom : Math.min(bottom, cardY - MASCOT_RISE - GAP);
+  const holeBottom = rect?.target === 'nav' ? bottom : Math.min(bottom, cardY - mascotRise - GAP);
   const holeWidth = Math.max(0, right - left);
   const holeHeight = Math.max(0, holeBottom - holeTop);
   const hasHole = rect !== null && holeWidth > 0 && holeHeight > 0;
   const [cardTop] = useState(() => new Animated.Value(cardY));
-  const copyHeight = Math.min(height < 550 ? 80 : 112, Math.max(48, safeBottom - minCardY - 138));
+  const copyHeight = Math.min(112, Math.max(20, safeHeight - mascotRise - 150));
+  const mascotStyle = { top: -mascotRise, width: mascotHeight, height: mascotHeight };
   const duration = visible && !reduceMotion ? GUIDE_TRANSITION_DURATION : 0;
 
   useLayoutEffect(() => {
@@ -109,7 +121,7 @@ export function AppGuideOverlay({ visible, step, rect, pageReady, reduceMotion, 
     return () => fade.stop();
   }, [contentProgress, previous, step]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!pageReady && duration > 0) return;
     const move = Animated.timing(cardTop, {
       toValue: cardY, duration, easing: Easing.inOut(Easing.cubic), useNativeDriver: false, isInteraction: false,
@@ -172,17 +184,17 @@ export function AppGuideOverlay({ visible, step, rect, pageReady, reduceMotion, 
           <AnimatedRect testID="app-guide-spotlight" x={spotlight.x} y={spotlight.y} width={spotlight.width} height={spotlight.height} rx={12} fill="none" stroke="white" strokeWidth={2} opacity={spotlight.opacity} />
         </Svg>
 
-        <Animated.View testID="app-guide-card" accessibilityViewIsModal style={[styles.cardWrap, { top: cardTop }]}>
+        <Animated.View testID="app-guide-card" accessibilityViewIsModal style={[styles.cardWrap, { top: cardTop, left: cardLeft, width: cardWidth }]}>
           {previous && previous.pose !== data.pose && (
-            <Animated.View pointerEvents="none" aria-hidden accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={[styles.mascot, { opacity: outgoingOpacity }]}>
+            <Animated.View pointerEvents="none" aria-hidden accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={[styles.mascot, mascotStyle, { opacity: outgoingOpacity }]}>
               <Mascot pose={previous.pose} style={styles.mascotImage} />
             </Animated.View>
           )}
-          <Animated.View pointerEvents="none" style={[styles.mascot, { opacity: previous?.pose === data.pose ? 1 : contentProgress }]}>
+          <Animated.View pointerEvents="none" style={[styles.mascot, mascotStyle, { opacity: previous?.pose === data.pose ? 1 : contentProgress }]}>
             <Mascot pose={data.pose} style={styles.mascotImage} />
           </Animated.View>
           <View style={styles.card} onLayout={event => setCardHeight(event.nativeEvent.layout.height)}>
-            <Pressable accessibilityRole="button" accessibilityLabel="Close guide" style={styles.close} onPress={onClose} hitSlop={8}>
+            <Pressable accessibilityRole="button" accessibilityLabel="Close guide" style={styles.close} onPress={onClose}>
               <Feather name="x" size={20} color={colors.grayText} />
             </Pressable>
             <View style={styles.dots} accessible accessibilityLabel={`Step ${step + 1} of ${GUIDE_STEPS.length}`}>
@@ -190,19 +202,19 @@ export function AppGuideOverlay({ visible, step, rect, pageReady, reduceMotion, 
                 <View key={title} style={[styles.dot, i === step && styles.dotActive]} />
               ))}
             </View>
-            <View style={{ height: copyHeight }}>
+            <View>
               {(previous ? [previous, data] : [data]).map(layer => {
                 const outgoing = layer !== data;
                 return (
                   <Animated.View
                     key={layer.title}
-                    style={[StyleSheet.absoluteFill, { opacity: outgoing ? outgoingOpacity : contentProgress }]}
+                    style={[outgoing && StyleSheet.absoluteFill, { opacity: outgoing ? outgoingOpacity : contentProgress }]}
                     pointerEvents={outgoing ? 'none' : 'auto'}
                     aria-hidden={outgoing}
                     accessibilityElementsHidden={outgoing}
                     importantForAccessibility={outgoing ? 'no-hide-descendants' : 'auto'}
                   >
-                    <ScrollView>
+                    <ScrollView style={{ flexGrow: 0, maxHeight: copyHeight }}>
                       <Text accessibilityRole="header" accessibilityLiveRegion={outgoing ? 'none' : 'polite'} style={styles.title}>{layer.title}</Text>
                       <Text style={styles.body}>{layer.body}</Text>
                     </ScrollView>
@@ -230,19 +242,19 @@ export function AppGuideOverlay({ visible, step, rect, pageReady, reduceMotion, 
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
-  cardWrap: { position: 'absolute', left: 16, right: 16 },
-  mascot: { position: 'absolute', top: -MASCOT_RISE, alignSelf: 'center', width: 110, height: 120, zIndex: 1 },
+  cardWrap: { position: 'absolute' },
+  mascot: { position: 'absolute', alignSelf: 'center', zIndex: 1 },
   mascotImage: { width: '100%', height: '100%' },
-  card: { backgroundColor: '#fff', borderRadius: 12, paddingHorizontal: 20, paddingVertical: 20 },
-  close: { position: 'absolute', top: 12, right: 16, zIndex: 2 },
-  dots: { flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 16, marginTop: 4 },
+  card: { backgroundColor: '#fff', borderRadius: 12, paddingHorizontal: 16, paddingVertical: 14 },
+  close: { position: 'absolute', top: 0, right: 4, zIndex: 2, width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+  dots: { flexDirection: 'row', alignItems: 'center', gap: 5, height: 20, marginBottom: 8 },
   dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#d9d9d9' },
   dotActive: { width: 28, backgroundColor: colors.primary },
   title: { fontFamily: fonts.bold, fontSize: 17, color: colors.label, marginBottom: 8 },
   body: { fontFamily: fonts.regular, fontSize: 13, color: colors.grayText, lineHeight: 20 },
-  actions: { marginTop: 20, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  back: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  actions: { marginTop: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  back: { flexDirection: 'row', alignItems: 'center', gap: 4, minHeight: 44, paddingRight: 12 },
   backText: { fontFamily: fonts.medium, fontSize: 13, color: colors.label },
-  next: { backgroundColor: colors.primary, borderRadius: 8, paddingHorizontal: 24, paddingVertical: 8 },
+  next: { backgroundColor: colors.primary, borderRadius: 8, paddingHorizontal: 24, minHeight: 44, justifyContent: 'center' },
   nextText: { fontFamily: fonts.bold, fontSize: 13, color: '#fff' },
 });
