@@ -31,7 +31,7 @@ import { BottomNav } from '@/components/ui/BottomNav';
 import { AppRefreshControl } from '@/components/ui/AppRefreshControl';
 import { AppGuideOverlay, GUIDE_STEPS, GUIDE_TRANSITION_DURATION, type GuideRect, type GuideSpotlight } from '@/components/ui/AppGuide';
 import { usePullToRefresh } from '@/hooks/usePullToRefresh';
-import { RewardsScreen } from '@/screens/home/RewardsScreen';
+import { RewardsScreen, type LoyaltyCatalogItem } from '@/screens/home/RewardsScreen';
 import { OrdersScreen } from '@/screens/orders/OrdersScreen';
 import type { MainNavigateOptions, MainScreen, MainTab } from '@/navigation/types';
 import { useIsFocused } from '@react-navigation/native';
@@ -46,7 +46,6 @@ import { OrderProgressTracker } from '@/components/orders/OrderProgressTracker';
  * Greeting, Service Request milestones, and the account's track-specific loyalty
  * summary are loaded from the authenticated session and NestJS API.
  */
-type LoyaltyCatalogItem = { id: string; branch_id: string; branch_name: string | null; name: string; points_cost: number; stock_qty: number };
 type HouseholdAccountRow = { branch_id: string; points_balance: number };
 type HouseholdHistoryRow = { id: string; type: string; points_delta: number; created_at: string };
 type LoyaltyRedemptionRow = {

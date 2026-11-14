@@ -7,6 +7,7 @@ import { colors } from '@/theme/colors';
 import { fonts } from '@/theme/fonts';
 import { cardShadow, radii } from '@/theme/metrics';
 import { images } from '@/lib/assets';
+import { API_URL } from '@/constants/config';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiFetch, apiErrorMessage } from '@/lib/api';
 
@@ -15,14 +16,15 @@ import { apiFetch, apiErrorMessage } from '@/lib/api';
  * Home when the Rewards tab is active, so it shares Home's header + bottom nav.
  */
 type Sub = 'my' | 'all' | 'activeCodes';
-type Reward = { name: string; pts: number; img: number | null };
-type CatalogItem = {
+type Reward = { name: string; pts: number; bundledImage: number | null; photoPath?: string | null };
+export type LoyaltyCatalogItem = {
   id: string;
   branch_id: string;
   branch_name: string | null;
   name: string;
   points_cost: number;
   stock_qty: number;
+  photo_path?: string | null;
 };
 type HouseholdAccount = { branch_id: string; points_balance: number };
 type CommercialAccount = {
@@ -86,7 +88,7 @@ function RewardCard({
       onPress={onPress}
       disabled={!onPress}
     >
-      <RewardImage image={item.img} />
+      <RewardImage key={item.photoPath} image={item.bundledImage} photoPath={item.photoPath} />
       <View style={styles.ptsPill}>
         <Text style={styles.ptsPillText}>{item.pts} pts</Text>
       </View>
@@ -96,9 +98,13 @@ function RewardCard({
   );
 }
 
-function RewardImage({ image }: { image: number | null }) {
-  return image ? (
-    <Image source={image} style={styles.rewardImg} resizeMode="contain" />
+function RewardImage({ image, photoPath }: { image: number | null; photoPath?: string | null }) {
+  const [failed, setFailed] = useState(false);
+  const source = photoPath?.startsWith('/loyalty/catalog/photos/') && !failed
+    ? { uri: `${API_URL}/api${photoPath}` }
+    : image;
+  return source ? (
+    <Image source={source} style={styles.rewardImg} resizeMode="contain" onError={() => setFailed(true)} />
   ) : (
     <View style={[styles.rewardImg, { alignItems: 'center', justifyContent: 'center' }]}>
       <Feather name="gift" size={32} color={colors.primary} />
@@ -304,7 +310,7 @@ export function RewardsScreen({
   onExit: () => void; 
   initialSub?: Sub;
   points: number;
-  catalog: CatalogItem[];
+  catalog: LoyaltyCatalogItem[];
   history: HistoryRow[];
   householdAccounts: HouseholdAccount[];
   activeCodes: ActiveRedemption[];
@@ -316,14 +322,14 @@ export function RewardsScreen({
 }) {
   const { accountType, session } = useAuth();
   const [sub, setSub] = useState<Sub>(initialSub);
-  const [redeemItem, setRedeemItem] = useState<CatalogItem | null>(null);
+  const [redeemItem, setRedeemItem] = useState<LoyaltyCatalogItem | null>(null);
   const [selectedCode, setSelectedCode] = useState<ActiveRedemption | null>(null);
   const [recentlyIssued, setRecentlyIssued] = useState<ActiveRedemption | null>(null);
   const submitting = useRef(false);
 
   const [loading, setLoading] = useState(false);
   const [redeemError, setRedeemError] = useState<string | null>(null);
-  const availableFor = (item: CatalogItem) =>
+  const availableFor = (item: LoyaltyCatalogItem) =>
     householdAccounts.find((account) => account.branch_id === item.branch_id)?.points_balance ?? 0;
 
   const handleRedeem = async () => {
@@ -372,13 +378,13 @@ export function RewardsScreen({
     setRedeemItem(null);
     setRedeemError(null);
   };
-  const renderReward = (item: CatalogItem) => {
+  const renderReward = (item: LoyaltyCatalogItem) => {
     const inStock = item.stock_qty > 0;
     const affordable = item.points_cost <= availableFor(item);
     const availability = inStock ? (affordable ? '' : 'More points needed') : 'Out of stock';
     return (
       <RewardCard
-        item={{ name: item.name, pts: item.points_cost, img: rewardImageFor(item.name) }}
+        item={{ name: item.name, pts: item.points_cost, bundledImage: rewardImageFor(item.name), photoPath: item.photo_path }}
         detail={[item.branch_name, availability].filter(Boolean).join(' · ')}
         onPress={inStock && affordable && !loyaltyError ? () => {
           setRedeemError(null);
