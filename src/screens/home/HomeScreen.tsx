@@ -46,7 +46,7 @@ import { OrderProgressTracker } from '@/components/orders/OrderProgressTracker';
  * Greeting, Service Request milestones, and the account's track-specific loyalty
  * summary are loaded from the authenticated session and NestJS API.
  */
-type LoyaltyCatalogItem = { id: string; branch_id: string; branch_name: string | null; name: string; points_cost: number; stock_qty: number };
+type LoyaltyCatalogItem = { id: string; franchise_reward_id: string; branch_id: string; branch_name: string | null; name: string; points_cost: number; stock_qty: number };
 type HouseholdAccountRow = { branch_id: string; points_balance: number };
 type HouseholdHistoryRow = { id: string; type: string; points_delta: number; created_at: string };
 type LoyaltyRedemptionRow = {
@@ -157,7 +157,6 @@ export function HomeScreen({
   const [points, setPoints] = useState(0);
   const [catalog, setCatalog] = useState<LoyaltyCatalogItem[]>([]);
   const [history, setHistory] = useState<HouseholdHistoryRow[]>([]);
-  const [householdAccounts, setHouseholdAccounts] = useState<HouseholdAccountRow[]>([]);
   const [activeCodes, setActiveCodes] = useState<LoyaltyRedemptionRow[]>([]);
   const [recentRedemptions, setRecentRedemptions] = useState<LoyaltyRedemptionRow[]>([]);
   const [commercialAccounts, setCommercialAccounts] = useState<CommercialAccountRow[]>([]);
@@ -190,7 +189,6 @@ export function HomeScreen({
         const meData = (await meResult.value.json()) as CustomerLoyaltyPayload;
         setPoints(meData.points_balance ?? 0);
         setHistory(meData.household_transactions ?? []);
-        setHouseholdAccounts(meData.household_accounts ?? []);
         setCommercialAccounts(meData.commercial_accounts ?? []);
         setCommercialPurchases(meData.commercial_purchases ?? []);
         setActiveCodes(meData.active_redemptions ?? []);
@@ -456,7 +454,6 @@ export function HomeScreen({
             points={points}
             catalog={catalog}
             history={history}
-            householdAccounts={householdAccounts}
             activeCodes={activeCodes}
             recentRedemptions={recentRedemptions}
             commercialAccounts={commercialAccounts}

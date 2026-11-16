@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { uuid } from 'expo';
+import { uuid } from 'expo-modules-core';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Image, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Feather } from '@expo/vector-icons';
@@ -18,13 +18,13 @@ type Sub = 'my' | 'all' | 'activeCodes';
 type Reward = { name: string; pts: number; img: number | null };
 type CatalogItem = {
   id: string;
+  franchise_reward_id: string;
   branch_id: string;
   branch_name: string | null;
   name: string;
   points_cost: number;
   stock_qty: number;
 };
-type HouseholdAccount = { branch_id: string; points_balance: number };
 type CommercialAccount = {
   branch_id: string;
   branch_name: string | null;
@@ -293,7 +293,6 @@ export function RewardsScreen({
   points,
   catalog,
   history,
-  householdAccounts,
   activeCodes,
   recentRedemptions,
   commercialAccounts,
@@ -306,7 +305,6 @@ export function RewardsScreen({
   points: number;
   catalog: CatalogItem[];
   history: HistoryRow[];
-  householdAccounts: HouseholdAccount[];
   activeCodes: ActiveRedemption[];
   recentRedemptions: ActiveRedemption[];
   commercialAccounts: CommercialAccount[];
@@ -323,8 +321,6 @@ export function RewardsScreen({
 
   const [loading, setLoading] = useState(false);
   const [redeemError, setRedeemError] = useState<string | null>(null);
-  const availableFor = (item: CatalogItem) =>
-    householdAccounts.find((account) => account.branch_id === item.branch_id)?.points_balance ?? 0;
 
   const handleRedeem = async () => {
     if (!redeemItem || !session?.user.id || submitting.current) return;
@@ -332,17 +328,19 @@ export function RewardsScreen({
     setRedeemError(null);
     setLoading(true);
     const itemId = redeemItem.id;
-    const submissionKey = `household-redemption:${session.user.id}:${itemId}`;
+    const submissionKey = `household-redemption:${session.user.id}:${redeemItem.franchise_reward_id ?? itemId}`;
+    const legacySubmissionKey = `household-redemption:${session.user.id}:${itemId}`;
     try {
       // Keep the same submission across network errors and app restarts.
-      const existingSubmission = await AsyncStorage.getItem(submissionKey);
+      const existingSubmission = await AsyncStorage.getItem(submissionKey)
+        ?? await AsyncStorage.getItem(legacySubmissionKey);
       const submissionId = existingSubmission ?? uuid.v4();
-      if (!existingSubmission) await AsyncStorage.setItem(submissionKey, submissionId);
+      await AsyncStorage.setItem(submissionKey, submissionId);
       const res = await apiFetch('/loyalty/me/redemptions', {
         method: 'POST',
         body: JSON.stringify({ catalogItemId: itemId, submissionId, expectedPointsCost: redeemItem.points_cost }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => null);
       if (!res.ok) {
         setRedeemError(apiErrorMessage(data, 'Could not get a pickup code'));
         if (res.status === 409) onRefresh();
@@ -354,6 +352,7 @@ export function RewardsScreen({
         return;
       }
       await AsyncStorage.removeItem(submissionKey);
+      await AsyncStorage.removeItem(legacySubmissionKey);
       setRedeemItem(null);
       setRecentlyIssued(redemption);
       setSelectedCode(redemption);
@@ -374,7 +373,7 @@ export function RewardsScreen({
   };
   const renderReward = (item: CatalogItem) => {
     const inStock = item.stock_qty > 0;
-    const affordable = item.points_cost <= availableFor(item);
+    const affordable = item.points_cost <= points;
     const availability = inStock ? (affordable ? '' : 'More points needed') : 'Out of stock';
     return (
       <RewardCard
@@ -430,7 +429,7 @@ export function RewardsScreen({
           ) : null}
           <Text style={styles.pointsBig}>{points} points</Text>
           <Text style={styles.blurb}>
-            Earn points for delivered cylinder purchases. Points expire 12 months after they are earned and can be used at the branch where you earned them.
+            Earn points for delivered cylinder purchases at any branch. Your points are shared across branches and expire 12 months after they are earned. Your pickup branch is assigned automatically based on recent orders and stock.
           </Text>
 
           <View style={styles.sectionRow}>
