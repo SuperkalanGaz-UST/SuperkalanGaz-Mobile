@@ -20,13 +20,6 @@ export interface DeliveryRiderInvitation {
   mobileVerified: boolean;
 }
 
-export interface DeliveryVehicle {
-  id: string;
-  label: string;
-  model: string | null;
-  healthy: boolean;
-}
-
 export interface DeliveryAssignment {
   serviceRequestId: string;
   srCode: string;
@@ -35,7 +28,6 @@ export interface DeliveryAssignment {
   cylinderSize: string;
   quantity: number;
   items?: ServiceRequestItem[];
-  vehicleLabel: string;
   requestedAt: string;
   dispatchedAt: string;
   inTransitAt: string | null;
@@ -44,12 +36,7 @@ export interface DeliveryAssignment {
 export interface DeliveryOffer {
   offerId: string;
   expiresAt: string;
-  assignment: Omit<DeliveryAssignment, 'dispatchedAt' | 'inTransitAt' | 'vehicleLabel'>;
-}
-
-export interface DeliveryMotorcycleChoice {
-  id: string;
-  label: string;
+  assignment: Omit<DeliveryAssignment, 'dispatchedAt' | 'inTransitAt'>;
 }
 
 export interface DeliveryRiderDashboard {
@@ -61,7 +48,6 @@ export interface DeliveryRiderDashboard {
     branchName: string;
     availability: DeliveryRiderAvailability;
     operationalLocation: DeliveryRiderOperationalLocation | null;
-    vehicle: DeliveryVehicle | null;
   };
   currentOffer: DeliveryOffer | null;
   activeDelivery: DeliveryAssignment | null;
@@ -135,11 +121,9 @@ export async function updateDeliveryRiderOperationalLocation(
 
 export async function acceptDeliveryOffer(
   offerId: string,
-  vehicleId?: string,
-): Promise<DeliveryRiderDashboard & { vehicleChoices: DeliveryMotorcycleChoice[] | null }> {
+): Promise<DeliveryRiderDashboard> {
   const response = await apiFetch(`/delivery-rider/offers/${encodeURIComponent(offerId)}/accept`, {
     method: 'POST',
-    body: JSON.stringify(vehicleId ? { vehicleId } : {}),
   });
   return responseData(response, 'This delivery offer can no longer be accepted.');
 }

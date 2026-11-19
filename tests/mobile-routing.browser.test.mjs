@@ -598,7 +598,7 @@ test('the customer can choose a delivery pin in the browser', { timeout: 15_000 
   } finally { await context.close(); }
 });
 
-test('a Delivery Rider goes Available without a vehicle and confirms an ambiguous GPS match', { timeout: 15_000 }, async () => {
+test('a Delivery Rider goes Available and accepts an offer without a motorcycle', { timeout: 15_000 }, async () => {
   const offline = driverDashboard();
   offline.deliveryRider.vehicle = null;
   const assignment = { serviceRequestId: 'order-a', srCode: 'SR-10001', customerName: 'Test customer', deliveryAddress: 'Test address',
@@ -608,7 +608,6 @@ test('a Delivery Rider goes Available without a vehicle and confirms an ambiguou
     deliveryRider: { ...offline.deliveryRider, availability: 'Available' },
     currentOffer: { offerId: 'test-offer', expiresAt: new Date(Date.now() + 60_000).toISOString(), assignment },
   };
-  const choices = [{ id: 'motorcycle-a', label: 'ABC 123' }, { id: 'motorcycle-b', label: 'DEF 456' }];
   const { context, page } = await newContext(sessionFor('driver'), { dashboard: offline, viewport: { width: 320, height: 568 } });
   try {
     await context.grantPermissions(['geolocation']);
@@ -619,27 +618,18 @@ test('a Delivery Rider goes Available without a vehicle and confirms an ambiguou
     });
     const writes = [];
     await context.route('**/api/delivery-rider/offers/test-offer/accept', route => {
-      const input = route.request().postDataJSON();
-      writes.push(input);
-      if (!input.vehicleId) return route.fulfill({ json: { ...offered, vehicleChoices: choices } });
-      assert.deepEqual(input, { vehicleId: 'motorcycle-b' });
-      return route.fulfill({ json: {
-        ...driverDashboard({ ...assignment, vehicleLabel: 'DEF 456', dispatchedAt: new Date().toISOString(), inTransitAt: null }),
-        vehicleChoices: null,
-      } });
+      writes.push(route.request().postData());
+      const accepted = driverDashboard({ ...assignment, dispatchedAt: new Date().toISOString(), inTransitAt: null });
+      accepted.deliveryRider.vehicle = null;
+      return route.fulfill({ json: accepted });
     });
     await page.goto(`${baseUrl}/delivery-rider/home`);
-    await page.getByText('No vehicle assigned', { exact: true }).waitFor();
     await page.getByText('Go Available', { exact: true }).click();
     await page.getByRole('button', { name: 'Accept offer', exact: true }).click();
-    await page.getByText('Confirm your motorcycle', { exact: true }).waitFor();
-    const confirm = page.getByRole('button', { name: 'Confirm and accept', exact: true });
-    assert.equal(await confirm.isDisabled(), true);
-    await page.getByRole('radio', { name: 'DEF 456' }).click();
-    await confirm.click();
     await expectPath(page, '/delivery-rider/delivery');
-    await page.getByText('DEF 456', { exact: true }).waitFor();
-    assert.deepEqual(writes, [{}, { vehicleId: 'motorcycle-b' }]);
+    await page.getByText('SR-10001', { exact: true }).first().waitFor();
+    assert.equal(await page.getByText('Assigned vehicle', { exact: true }).count(), 0);
+    assert.deepEqual(writes, [null]);
   } finally { await context.close(); }
 });
 

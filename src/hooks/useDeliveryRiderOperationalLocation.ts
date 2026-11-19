@@ -15,9 +15,7 @@ export type OperationalLocationState =
 interface OperationalLocationStatus {
   state: OperationalLocationState;
   message: string;
-  lastSyncedAt: Date | null;
   ensurePermission: () => Promise<boolean>;
-  refreshForDispatch: () => Promise<void>;
 }
 
 const messages: Record<OperationalLocationState, string> = {
@@ -48,7 +46,6 @@ export function useDeliveryRiderOperationalLocation(
   enabled: boolean,
 ): OperationalLocationStatus {
   const [state, setState] = useState<OperationalLocationState>('inactive');
-  const [lastSyncedAt, setLastSyncedAt] = useState<Date | null>(null);
   const [appState, setAppState] = useState(AppState.currentState);
 
   useEffect(() => {
@@ -78,7 +75,6 @@ export function useDeliveryRiderOperationalLocation(
   useEffect(() => {
     if (!enabled) {
       setState('inactive');
-      setLastSyncedAt(null);
       return;
     }
     if (appState !== 'active') {
@@ -106,7 +102,6 @@ export function useDeliveryRiderOperationalLocation(
               .then((result) => {
                 if (!active || !result.recorded) return;
                 setState('tracking');
-                setLastSyncedAt(new Date(result.receivedAt ?? Date.now()));
               })
               .catch(() => {
                 if (active) setState('error');
@@ -128,25 +123,5 @@ export function useDeliveryRiderOperationalLocation(
     };
   }, [enabled, ensurePermission, appState]);
 
-  const refreshForDispatch = async () => {
-    if (!enabled || AppState.currentState !== 'active' || (lastSyncedAt && Date.now() - lastSyncedAt.getTime() < 20_000)) return;
-    let timedOut = false;
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    try {
-      const deadline = new Promise<void>(resolve => {
-        timeout = setTimeout(() => { timedOut = true; resolve(); }, 3_000);
-      });
-      const refresh = async () => {
-        const position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-        if (!timedOut && AppState.currentState === 'active') await sendPosition(position);
-      };
-      await Promise.race([refresh(), deadline]);
-    } catch {
-      // An unavailable phone fix can still lead to explicit plate confirmation.
-    } finally {
-      clearTimeout(timeout);
-    }
-  };
-
-  return { state, message: messages[state], lastSyncedAt, ensurePermission, refreshForDispatch };
+  return { state, message: messages[state], ensurePermission };
 }

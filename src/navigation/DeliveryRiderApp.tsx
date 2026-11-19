@@ -17,7 +17,6 @@ import {
   startDelivery,
   submitDeliveredWithProof,
   type DeliveryAssignment,
-  type DeliveryMotorcycleChoice,
   type DeliveryProofPhoto,
   type DeliveryRiderDashboard,
 } from '@/lib/deliveryRiderApi';
@@ -80,7 +79,6 @@ export function DeliveryRiderApp() {
   const [busy, setBusy] = useState(false);
   const submittingProof = useRef(false);
   const [error, setError] = useState('');
-  const [motorcycleSelection, setMotorcycleSelection] = useState<{ offerId: string; vehicles: DeliveryMotorcycleChoice[] } | null>(null);
   const dashboardVersion = useRef(0);
   const locationEnabled = dashboard?.deliveryRider.availability === 'Available'
     || dashboard?.deliveryRider.availability === 'On Delivery';
@@ -273,18 +271,14 @@ export function DeliveryRiderApp() {
           <FocusedOfferSheet
             key={dashboard.currentOffer.offerId}
             offer={dashboard.currentOffer}
-            vehicles={motorcycleSelection?.offerId === dashboard.currentOffer.offerId ? motorcycleSelection.vehicles : []}
             busy={busy}
             error={error}
-            onAccept={(vehicleId) => {
+            onAccept={() => {
               const offerId = dashboard.currentOffer?.offerId;
               if (!offerId) return;
               let dispatched = false;
               void runDashboardAction(async () => {
-                if (!vehicleId) await operationalLocation.refreshForDispatch();
-                const next = await acceptDeliveryOffer(offerId, vehicleId);
-                setMotorcycleSelection(next.vehicleChoices?.length && next.currentOffer?.offerId === offerId
-                  ? { offerId, vehicles: next.vehicleChoices } : null);
+                const next = await acceptDeliveryOffer(offerId);
                 dispatched = Boolean(next.activeDelivery);
                 return next;
               }).then(succeeded => {
@@ -293,10 +287,6 @@ export function DeliveryRiderApp() {
                   navigation.navigate('delivery');
                 }
               });
-            }}
-            onRetry={() => {
-              setMotorcycleSelection(null);
-              setError('');
             }}
             onDecline={() => {
               const offerId = dashboard.currentOffer?.offerId;
