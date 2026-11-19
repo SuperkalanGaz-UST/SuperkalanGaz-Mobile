@@ -35,7 +35,7 @@ before(async () => {
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   baseUrl = `http://127.0.0.1:${server.address().port}`;
-  browser = await chromium.launch({ headless: true });
+  browser = await chromium.launch({ headless: true, ...(process.env.TEST_BROWSER_CHANNEL ? { channel: process.env.TEST_BROWSER_CHANNEL } : {}) });
 });
 
 after(async () => {
@@ -609,6 +609,60 @@ test('order links retain the distinction between new requests and milestone trac
     assert.equal(requests.some(r => r.path === '/api/service-requests/me'), true);
     assert.equal(requests.some(r => r.method !== 'GET'), false, 'Opening an order link must never create a request');
     assert.deepEqual(errors, []);
+  } finally { await context.close(); }
+});
+
+test('customer tracking stays Preparing after rider acceptance and advances only when transit starts', { timeout: 30_000 }, async () => {
+  const order = {
+    id: '00000000-0000-4000-8000-000000000006', status: 'Pending',
+    cylinder_size: '11kg', quantity: 1, requested_at: '2026-11-20T01:00:00Z',
+    created_at: '2026-11-20T01:00:00Z', dispatched_at: null, in_transit_at: null, delivered_at: null,
+    payment_method: 'Cash on Delivery', payment_status: 'Pending', rider_id: null,
+  };
+  const { context, page, requests, errors } = await newContext(sessionFor('customer'), { orders: [order], reducedMotion: 'reduce' });
+  page.setDefaultTimeout(8_000);
+  let phase = 'pending order';
+  try {
+    await page.goto(`${baseUrl}/customer/order/${order.id}`);
+    await page.getByText('Track my Order', { exact: true }).waitFor();
+    const transit = page.getByText('Out for Delivery', { exact: true });
+    assert.equal(await transit.evaluate(el => getComputedStyle(el).color), 'rgb(138, 143, 153)');
+    assert.equal(await page.getByText('Order Confirmed', { exact: true }).evaluate(el => getComputedStyle(el).color), 'rgb(20, 50, 99)');
+
+    // Accepting the offer assigns a rider and stamps dispatch, without starting transit.
+    phase = 'accepted order';
+    Object.assign(order, { status: 'Dispatched', dispatched_at: '2026-11-20T01:05:00Z', rider_id: 'rider-1' });
+    await page.waitForFunction(() => [...document.querySelectorAll('*')].some(el =>
+      el.textContent === 'Preparing' && getComputedStyle(el).color === 'rgb(20, 50, 99)'));
+    assert.equal(await transit.evaluate(el => getComputedStyle(el).color), 'rgb(138, 143, 153)');
+    assert.equal(await page.getByText('Your rider is on the way with your order!', { exact: true }).count(), 0);
+    await page.reload();
+    await page.getByText('Preparing', { exact: true }).waitFor();
+    assert.equal(await transit.evaluate(el => getComputedStyle(el).color), 'rgb(138, 143, 153)');
+
+    await page.goto(`${baseUrl}/customer/home`);
+    phase = 'home card';
+    const card = page.getByRole('button', { name: 'View active order status', exact: true });
+    await card.getByText('Preparing', { exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Close guide', exact: true }).click();
+    await page.getByTestId('app-guide-card').waitFor({ state: 'hidden' });
+    await card.click();
+    await page.getByText('Track my Order', { exact: true }).waitFor();
+
+    // The rider's start action is the only transition to the travelling milestone.
+    phase = 'started transit';
+    Object.assign(order, { status: 'En Route', in_transit_at: '2026-11-20T01:10:00Z' });
+    await page.getByText('Your rider is on the way with your order!', { exact: true }).waitFor();
+    assert.equal(await transit.evaluate(el => getComputedStyle(el).color), 'rgb(20, 50, 99)');
+    await page.getByText('Your rider has started the trip and is heading your way.', { exact: true }).waitFor();
+
+    Object.assign(order, { status: 'Delivered', delivered_at: '2026-11-20T01:25:00Z' });
+    phase = 'delivered order';
+    await page.getByText('Delivery Complete!', { exact: true }).waitFor();
+    assert.equal(requests.some(request => request.method !== 'GET'), false, 'Tracking must not create or advance delivery milestones');
+    assert.deepEqual(errors, []);
+  } catch (error) {
+    throw new Error(`${phase}: ${page.url()}\n${(await page.locator('body').innerText()).slice(0, 1500)}`, { cause: error });
   } finally { await context.close(); }
 });
 

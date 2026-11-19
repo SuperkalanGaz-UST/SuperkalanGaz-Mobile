@@ -5,7 +5,7 @@ import {
   Text,
   TextInput,
   View,
-  type TextInputInstance,
+  type TextInput as TextInputInstance,
   type TextInputProps,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';

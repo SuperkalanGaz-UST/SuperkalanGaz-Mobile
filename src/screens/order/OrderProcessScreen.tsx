@@ -1589,7 +1589,7 @@ export function OrderProcessScreen({ onNavigate, initialOrderId, onOrderPlaced }
       );
     }
 
-    const isOutForDelivery = orderProgress(currentOrder.status).step === 1;
+    const isOutForDelivery = orderProgress(currentOrder.status).step === 2;
     const isPending = currentOrder?.status === 'Pending';
 
     // Build branch label: "Superkalan Gaz Amadeo, Cavite" — use name + city only
@@ -1615,7 +1615,7 @@ export function OrderProcessScreen({ onNavigate, initialOrderId, onOrderPlaced }
             : `${branchLabel} has confirmed your order and is preparing it.`}
         </Text>
         <Text style={styles.trackNotify}>
-          {isOutForDelivery ? 'Your rider has been dispatched and is heading your way.' : "We'll notify you when your order is out for delivery."}
+          {isOutForDelivery ? 'Your rider has started the trip and is heading your way.' : "We'll notify you when your order is out for delivery."}
         </Text>
         <View style={styles.stepperWrap}><OrderProgressTracker status={currentOrder.status} variant="status" /></View>
         {isOutForDelivery && currentOrder?.rider_id ? (

@@ -1,5 +1,5 @@
 import { type Ref, useState } from 'react';
-import { Image, Modal, Pressable, StyleSheet, Text, View, type StyleProp, type ViewInstance, type ViewStyle } from 'react-native';
+import { Image, Modal, Pressable, StyleSheet, Text, View, type StyleProp, type View as ViewInstance, type ViewStyle } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@/contexts/AuthContext';

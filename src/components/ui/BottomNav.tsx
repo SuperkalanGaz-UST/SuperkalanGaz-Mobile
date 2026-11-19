@@ -1,5 +1,5 @@
 import type { Ref } from 'react';
-import { Image, Pressable, StyleSheet, Text, View, type ViewInstance } from 'react-native';
+import { Image, Pressable, StyleSheet, Text, View, type View as ViewInstance } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors } from '@/theme/colors';

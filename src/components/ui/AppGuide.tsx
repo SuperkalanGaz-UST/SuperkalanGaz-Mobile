@@ -9,7 +9,7 @@ import {
   Text,
   useWindowDimensions,
   View,
-  type ViewInstance,
+  type View as ViewInstance,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
