@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import { cylinderSummary } from '@/lib/serviceRequestItems';
 import {
   Modal,
@@ -16,7 +15,6 @@ import { DeliveryRiderHeader } from '@/components/driver/DeliveryRiderChrome';
 import type {
   DeliveryAssignment,
   DeliveryOffer,
-  DeliveryMotorcycleChoice,
   DeliveryRiderDashboard,
 } from '@/lib/deliveryRiderApi';
 import { colors } from '@/theme/colors';
@@ -61,7 +59,6 @@ function AssignmentDetails({ assignment }: { assignment: DeliveryAssignment }) {
       <DetailRow icon="user" label="Customer" value={assignment.customerName} />
       <DetailRow icon="map-pin" label="Customer address" value={assignment.deliveryAddress} />
       <DetailRow icon="box" label="Order" value={cylinderSummary({ ...assignment, cylinder_size: assignment.cylinderSize })} />
-      <DetailRow icon="truck" label="Assigned vehicle" value={assignment.vehicleLabel} />
     </View>
   );
 }
@@ -80,25 +77,18 @@ function OfferDetails({ assignment }: { assignment: DeliveryOffer['assignment'] 
 
 export function OfferSheet({
   offer,
-  vehicles,
   busy,
   error,
   onAccept,
   onDecline,
-  onRetry,
 }: {
   offer: DeliveryOffer;
-  vehicles: DeliveryMotorcycleChoice[];
   busy: boolean;
   error: string;
-  onAccept: (vehicleId?: string) => void;
+  onAccept: () => void;
   onDecline: () => void;
-  onRetry: () => void;
 }) {
   const insets = useSafeAreaInsets();
-  const [selectedVehicle, setSelectedVehicle] = useState<string>();
-  const selected = vehicles.find(vehicle => vehicle.id === selectedVehicle);
-  const acceptDisabled = busy || (vehicles.length > 0 && !selected);
   return (
     <Modal visible transparent animationType="fade" onRequestClose={() => undefined}>
       <View style={styles.modalRoot}>
@@ -117,32 +107,7 @@ export function OfferSheet({
               <Feather name="clock" size={15} color={colors.warning} />
               <Text style={styles.expiryText}>Respond before this offer expires</Text>
             </View>
-            {vehicles.length > 0 ? (
-              <>
-                <Text style={styles.sectionTitle}>Confirm your motorcycle</Text>
-                <Text style={styles.offerSubtitle}>GPS could not identify one motorcycle. Select the plate on the motorcycle you are using.</Text>
-                {vehicles.map(vehicle => (
-                  <Pressable
-                    key={vehicle.id}
-                    accessibilityRole="radio"
-                    aria-checked={selectedVehicle === vehicle.id}
-                    disabled={busy}
-                    onPress={() => setSelectedVehicle(vehicle.id)}
-                    style={styles.motorcycleChoice}
-                  >
-                    <Feather name={selectedVehicle === vehicle.id ? 'check-circle' : 'circle'} size={19} color={colors.primary} />
-                    <Text style={styles.vehicleTitle}>{vehicle.label}</Text>
-                  </Pressable>
-                ))}
-              </>
-            ) : null}
             {error ? <InlineError message={error} /> : null}
-            {error && vehicles.length > 0 ? (
-              <Pressable accessibilityRole="button" disabled={busy} onPress={onRetry} style={styles.motorcycleChoice}>
-                <Feather name="refresh-cw" size={17} color={colors.primary} />
-                <Text style={styles.vehicleTitle}>Check motorcycle again</Text>
-              </Pressable>
-            ) : null}
           </ScrollView>
           <View style={styles.offerActions}>
             <Pressable accessibilityRole="button" disabled={busy} onPress={onDecline} style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed, busy && styles.disabled]}>
@@ -150,14 +115,14 @@ export function OfferSheet({
             </Pressable>
             <Pressable
               accessibilityRole="button"
-              disabled={acceptDisabled}
-              onPress={() => onAccept(selected?.id)}
-              style={({ pressed }) => [styles.acceptButton, pressed && styles.pressed, acceptDisabled && styles.disabled]}
+              disabled={busy}
+              onPress={onAccept}
+              style={({ pressed }) => [styles.acceptButton, pressed && styles.pressed, busy && styles.disabled]}
             >
-              <Text style={styles.acceptButtonText}>{busy ? 'Responding…' : vehicles.length ? 'Confirm and accept' : 'Accept offer'}</Text>
+              <Text style={styles.acceptButtonText}>{busy ? 'Responding…' : 'Accept offer'}</Text>
             </Pressable>
           </View>
-          <Text style={styles.sheetFinePrint}>Once your motorcycle is assigned, this Service Request is ready for delivery.</Text>
+          <Text style={styles.sheetFinePrint}>Accept to start this delivery.</Text>
         </View>
       </View>
     </Modal>
@@ -186,7 +151,6 @@ export function DeliveryRiderHomeScreen({
   onOpenDelivery: () => void;
 }) {
   const profile = dashboard.deliveryRider;
-  const vehicleReady = Boolean(profile.vehicle?.healthy);
   const canGoAvailable = profile.availability === 'Offline' || profile.availability === 'Maintenance Due';
   const canGoOffline = profile.availability === 'Available' && !dashboard.currentOffer;
   const statusColor = profile.availability === 'Available'
@@ -224,7 +188,7 @@ export function DeliveryRiderHomeScreen({
                 ? 'You are ready to receive offers assigned by your Branch Manager.'
                 : profile.availability === 'On Delivery'
                   ? 'You have one active assigned delivery.'
-                  : 'Go Available to receive offers and use an eligible branch motorcycle.'}
+                  : 'Go Available when you are ready to receive delivery offers.'}
           </Text>
           {profile.availability === 'On Delivery' ? (
             <PrimaryButton label="View active delivery" onPress={onOpenDelivery} />
@@ -238,25 +202,6 @@ export function DeliveryRiderHomeScreen({
         </View>
 
         {error ? <InlineError message={error} /> : null}
-
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Motorcycle</Text>
-          <Text style={[styles.readinessLabel, { color: vehicleReady ? colors.success : colors.warning }]}>{vehicleReady ? 'Assigned' : profile.vehicle ? 'Maintenance' : 'Assigned at dispatch'}</Text>
-        </View>
-        <View style={styles.vehicleCard}>
-          <View style={styles.vehicleIcon}>
-            <Feather name="truck" size={24} color={vehicleReady ? colors.primary : colors.textMuted} />
-          </View>
-          <View style={styles.vehicleCopy}>
-            <Text style={styles.vehicleTitle}>{profile.vehicle?.label ?? 'No vehicle assigned'}</Text>
-            <Text style={styles.vehicleBody}>
-              {profile.vehicle
-                ? `${profile.vehicle.model ?? 'Branch vehicle'} · ${profile.vehicle.healthy ? 'Healthy' : 'Not ready'}`
-                : 'GPS helps match your motorcycle when you accept an offer. You can confirm the plate when needed.'}
-            </Text>
-          </View>
-          <Feather name={vehicleReady ? 'check-circle' : profile.vehicle ? 'alert-circle' : 'clock'} size={20} color={vehicleReady ? colors.success : colors.warning} />
-        </View>
 
         <View style={styles.infoNote}>
           <Feather name="navigation" size={18} color={locationActive ? colors.success : colors.primary} />
@@ -407,14 +352,7 @@ const styles = StyleSheet.create({
   statusName: { fontFamily: fonts.bold, fontSize: 22, color: colors.darkNavy },
   statusIcon: { width: 47, height: 47, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
   statusBody: { fontFamily: fonts.regular, fontSize: 12, lineHeight: 19, color: colors.textMuted },
-  sectionHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 4 },
   sectionTitle: { fontFamily: fonts.bold, fontSize: 15, color: colors.darkNavy },
-  readinessLabel: { fontFamily: fonts.semibold, fontSize: 11 },
-  vehicleCard: { flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: 17, padding: 15, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.inputBorder },
-  vehicleIcon: { width: 48, height: 48, borderRadius: 15, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.primaryTint },
-  vehicleCopy: { flex: 1 },
-  vehicleTitle: { fontFamily: fonts.semibold, fontSize: 13, color: colors.text },
-  vehicleBody: { fontFamily: fonts.regular, fontSize: 10, lineHeight: 16, color: colors.textMuted, marginTop: 3 },
   infoNote: { flexDirection: 'row', gap: 10, borderRadius: 14, padding: 14, backgroundColor: colors.primaryTint },
   infoNoteText: { flex: 1, fontFamily: fonts.regular, fontSize: 11, lineHeight: 18, color: colors.darkNavy },
   errorBanner: { flexDirection: 'row', alignItems: 'flex-start', gap: 9, borderRadius: 12, padding: 12, backgroundColor: '#FDECEA' },
@@ -422,7 +360,6 @@ const styles = StyleSheet.create({
   detailsCard: { gap: 1, borderRadius: 18, paddingHorizontal: 15, backgroundColor: colors.surface, overflow: 'hidden' },
   offerContent: { flexGrow: 0, flexShrink: 1 },
   offerContentInner: { gap: 10 },
-  motorcycleChoice: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 12, borderWidth: 1, borderColor: colors.inputBorder, borderRadius: 12 },
   offerDetailsCard: { gap: 1, borderRadius: 18, paddingHorizontal: 15, backgroundColor: '#F5FAFE', borderWidth: 1, borderColor: '#D4EAF7', overflow: 'hidden' },
   detailRow: { flexDirection: 'row', alignItems: 'center', gap: 11, minHeight: 62, paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
   detailIcon: { width: 34, height: 34, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.primaryTint },

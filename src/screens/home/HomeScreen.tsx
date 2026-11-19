@@ -156,7 +156,6 @@ export function HomeScreen({
   const [points, setPoints] = useState(0);
   const [catalog, setCatalog] = useState<LoyaltyCatalogItem[]>([]);
   const [history, setHistory] = useState<HouseholdHistoryRow[]>([]);
-  const [householdAccounts, setHouseholdAccounts] = useState<HouseholdAccountRow[]>([]);
   const [activeCodes, setActiveCodes] = useState<LoyaltyRedemptionRow[]>([]);
   const [recentRedemptions, setRecentRedemptions] = useState<LoyaltyRedemptionRow[]>([]);
   const [commercialAccounts, setCommercialAccounts] = useState<CommercialAccountRow[]>([]);
@@ -189,7 +188,6 @@ export function HomeScreen({
         const meData = (await meResult.value.json()) as CustomerLoyaltyPayload;
         setPoints(meData.points_balance ?? 0);
         setHistory(meData.household_transactions ?? []);
-        setHouseholdAccounts(meData.household_accounts ?? []);
         setCommercialAccounts(meData.commercial_accounts ?? []);
         setCommercialPurchases(meData.commercial_purchases ?? []);
         setActiveCodes(meData.active_redemptions ?? []);
@@ -455,7 +453,6 @@ export function HomeScreen({
             points={points}
             catalog={catalog}
             history={history}
-            householdAccounts={householdAccounts}
             activeCodes={activeCodes}
             recentRedemptions={recentRedemptions}
             commercialAccounts={commercialAccounts}

@@ -179,7 +179,7 @@ Hard constraints:
 3. **Loyalty Program Monitoring (LPM)** — see §8a. Two **separate** tracks; never merge.
 4. **CSAT Feedback & Analytics** — post-delivery star ratings, complaint (Incident) logging,
    average response-time tracking.
-5. **Fleet Management** — Delivery Rider roster, vehicle assignment, geofencing, and PMS.
+5. **Fleet Management** — Delivery Rider roster, vehicle tracking, geofencing, and PMS.
    SinoTrack ST-901 → Traccar → API remains authoritative for vehicle geofencing and PMS.
    Separately, mobile sends foreground Delivery Rider phone location while Available or On
    Delivery for Service Request and dispatch operations. Phone coordinates must never drive
