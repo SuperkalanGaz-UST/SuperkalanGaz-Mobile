@@ -1,7 +1,25 @@
-import type { Session } from '@supabase/supabase-js';
+import { isAuthRetryableFetchError, type Session } from '@supabase/supabase-js';
 import { Platform } from 'react-native';
 import { supabase } from '@/lib/supabase';
 import { API_URL } from '@/constants/config';
+
+let onRiderSessionEnded: ((message: string) => void) | undefined;
+
+export function subscribeToRiderSessionEnd(handler: (message: string) => void) {
+  onRiderSessionEnded = handler;
+  return () => { onRiderSessionEnded = undefined; };
+}
+
+async function handleRiderSessionRejection(response: Response, session: Session): Promise<void> {
+  const data: { code?: string; message?: string } | null = await response.clone().json().catch(() => null);
+  if (data?.code !== 'DELIVERY_RIDER_SESSION_IDLE' && data?.code !== 'DELIVERY_RIDER_SESSION_REPLACED') return;
+
+  const { data: { session: current } } = await supabase.auth.getSession();
+  // An older request may finish after this app has already signed in again.
+  if (current?.access_token !== session.access_token) return;
+  onRiderSessionEnded?.(data.message ?? 'Your Delivery Rider session ended. Sign in to continue.');
+  await supabase.auth.signOut({ scope: 'local' }).catch(() => undefined);
+}
 
 function isSessionExpired(session: Session | null): boolean {
   if (!session?.expires_at) return false;
@@ -59,7 +77,8 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
   if (!session || isSessionExpired(session)) {
     const { data: refreshedData, error } = await supabase.auth.refreshSession();
     if (error || !refreshedData.session) {
-      await supabase.auth.signOut();
+      if (isAuthRetryableFetchError(error)) throw new Error('Could not reach sign-in. Check your connection and try again.');
+      await supabase.auth.signOut({ scope: 'local' });
       throw new Error('Your session expired. Please log in again.');
     }
     session = refreshedData.session;
@@ -76,8 +95,13 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
   }
 
   const url = `${API_URL}/api${path}`;
-  if (isMultipart && Platform.OS !== 'web') return nativeMultipartFetch(url, init, headers);
-  return fetch(url, { ...init, headers });
+  const response = await (isMultipart && Platform.OS !== 'web'
+    ? nativeMultipartFetch(url, init, headers)
+    : fetch(url, { ...init, headers }));
+  if (response.status === 401 && session?.user.app_metadata.role === 'driver') {
+    await handleRiderSessionRejection(response, session);
+  }
+  return response;
 }
 
 /** Public NestJS endpoints such as customer registration, before a session exists. */

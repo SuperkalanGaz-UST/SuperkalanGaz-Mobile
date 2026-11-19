@@ -1,12 +1,12 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { Session } from '@supabase/supabase-js';
-import { apiErrorMessage, apiFetch, apiPublicFetch } from '@/lib/api';
+import { apiErrorMessage, apiFetch, apiPublicFetch, subscribeToRiderSessionEnd } from '@/lib/api';
 import { normalizePhMobile } from '@/lib/phMobile';
 import { supabase } from '@/lib/supabase';
 
 /**
- * Owns the mobile auth session. Sign-in goes through Supabase Auth; the
+ * Owns the mobile auth session. NestJS brokers password sign-in with Supabase Auth; the
  * resulting access token is attached to every API call by `src/lib/api.ts`.
  * The user's role/branch scope is derived server-side from that token — this
  * context never decides authorization.
@@ -67,6 +67,23 @@ async function requestSignUpOtpResend(email: string): Promise<{ error: string | 
 /** AsyncStorage key for the persisted account type (survives app restarts). */
 const ACCOUNT_TYPE_KEY = 'superkalan.accountType';
 const PASSWORD_RECOVERY_KEY = 'superkalan.passwordRecovery';
+
+async function signInThroughApi(identifier: string, password: string) {
+  try {
+    const response = await apiPublicFetch('/auth/mobile/sign-in', {
+      method: 'POST',
+      body: JSON.stringify({ identifier, password }),
+    });
+    const data: { access_token?: unknown; refresh_token?: unknown } | null = await response.json().catch(() => null);
+    if (!response.ok) return { error: new Error(apiErrorMessage(data, 'Could not sign in.')) };
+    if (typeof data?.access_token !== 'string' || typeof data.refresh_token !== 'string') {
+      return { error: new Error('Sign-in did not return a session. Try again.') };
+    }
+    return await supabase.auth.setSession({ access_token: data.access_token, refresh_token: data.refresh_token });
+  } catch {
+    return { error: new Error('Could not reach the sign-in service. Check your connection and try again.') };
+  }
+}
 
 function accountTypeFromSession(session: Session | null): AccountType | null {
   const value = session?.user.app_metadata.account_type;
@@ -132,6 +149,7 @@ interface AuthContextValue {
   accountType: AccountType | null;
   /** True until the initial session has been restored from storage. */
   initializing: boolean;
+  riderSessionNotice: string;
   /** Unified customer/Delivery Rider sign-in; the server-owned role and track route the app. */
   signIn: (identifier: string, password: string) => Promise<{ error: string | null }>;
   /** Refresh protected Auth claims after app-based Delivery Rider mobile verification. */
@@ -160,7 +178,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [accountType, setAccountType] = useState<AccountType | null>(null);
   const [initializing, setInitializing] = useState(true);
+  const [riderSessionNotice, setRiderSessionNotice] = useState('');
   const passwordRecoveryRef = useRef(false);
+  const riderSessionEnded = useRef(false);
+
+  useEffect(() => subscribeToRiderSessionEnd(message => {
+    riderSessionEnded.current = true;
+    setRiderSessionNotice(message);
+    setSession(null);
+  }), []);
 
   useEffect(() => {
     // Restore any persisted session + account type, then keep them in sync.
@@ -209,7 +235,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setSession(null);
         return;
       }
-      if (passwordRecoveryRef.current) {
+      if (passwordRecoveryRef.current || (riderSessionEnded.current && mobileRoleFromSession(next) === 'driver')) {
         setSession(null);
         return;
       }
@@ -226,21 +252,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // The authenticated user's protected claims decide both role and customer
     // track. The login form never asks the user to choose either one.
     const runSignIn = async (
-      credentials: { email: string; password: string } | { phone: string; password: string },
+      identifier: string,
+      password: string,
       chosenType: AccountType | null,
     ): Promise<{ error: string | null }> => {
       setAccountType(chosenType);
       if (!chosenType) await AsyncStorage.removeItem(ACCOUNT_TYPE_KEY);
-      const { error } = await supabase.auth.signInWithPassword(credentials);
-      if (error) return { error: error.message };
-
-      const { data } = await supabase.auth.getSession();
-      if (!data.session) return { error: 'No signed-in session was created' };
+      const signedIn = await (chosenType
+        ? supabase.auth.signInWithPassword({ email: identifier, password })
+        : signInThroughApi(identifier, password));
+      if (signedIn.error) return { error: signedIn.error.message };
+      const { data } = signedIn;
+      if (!data?.session) return { error: 'No signed-in session was created' };
+      riderSessionEnded.current = false;
+      setRiderSessionNotice('');
 
       const mobileRole = mobileRoleFromSession(data.session);
       if (mobileRole === 'driver') {
         if (chosenType) {
-          await supabase.auth.signOut();
+          await supabase.auth.signOut({ scope: 'local' });
           setSession(null);
           setAccountType(null);
           return { error: 'Use Login as Delivery Rider for this account.' };
@@ -249,7 +279,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           !isActiveSession(data.session) &&
           !isAcceptedDriverAwaitingMobileVerification(data.session)
         ) {
-          await supabase.auth.signOut();
+          await supabase.auth.signOut({ scope: 'local' });
           setSession(null);
           setAccountType(null);
           return {
@@ -302,15 +332,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       sessionRole: mobileRoleFromSession(session),
       accountType,
       initializing,
+      riderSessionNotice,
       signIn: async (identifier, password) => {
         const value = identifier.trim();
         if (value.includes('@')) {
-          return runSignIn({ email: value.toLowerCase(), password }, null);
+          return runSignIn(value.toLowerCase(), password, null);
         }
 
         const phone = normalizePhMobile(value);
         if (!phone) return { error: 'Enter a valid email or PH mobile number.' };
-        return runSignIn({ phone, password }, null);
+        return runSignIn(phone, password, null);
       },
       refreshSession: async () => {
         const { data, error } = await supabase.auth.refreshSession();
@@ -340,7 +371,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             const registrationError = apiErrorMessage(data, 'Registration failed');
             if (/already (?:been )?registered/i.test(registrationError)) {
               const existingSignIn = await runSignIn(
-                { email: input.email.trim().toLowerCase(), password: input.password },
+                input.email.trim().toLowerCase(), input.password,
                 input.accountType,
               );
               if (!existingSignIn.error) {
@@ -362,7 +393,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           if (needsConfirmation) return { error: null, needsConfirmation: true };
 
           const signedIn = await runSignIn(
-            { email: input.email.trim().toLowerCase(), password: input.password },
+            input.email.trim().toLowerCase(), input.password,
             input.accountType,
           );
           return { error: signedIn.error, needsConfirmation: false };
@@ -488,6 +519,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // Supabase cannot revoke the remote session. The app must never leave
         // the user stranded in a protected screen because sign-out failed remotely.
         try {
+          if (session && mobileRoleFromSession(session) === 'driver' && isActiveSession(session)) {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 3_000);
+            try {
+              await apiFetch('/delivery-rider/session/end', { method: 'POST', signal: controller.signal });
+            } catch {
+              // The local Supabase session can still be cleared if NestJS is unreachable.
+            } finally {
+              clearTimeout(timeout);
+            }
+          }
           await supabase.auth.signOut({ scope: 'local' });
         } catch {
           // Local cleanup below is the important part of the mobile logout flow.
@@ -502,7 +544,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       },
     };
-  }, [session, accountType, initializing]);
+  }, [session, accountType, initializing, riderSessionNotice]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

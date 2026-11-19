@@ -36,7 +36,7 @@ export function LoginScreen({
   onSignUp: () => void;
 }) {
   const insets = useSafeAreaInsets();
-  const { signIn } = useAuth();
+  const { signIn, riderSessionNotice } = useAuth();
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [errors, setErrors] = useState<{ identifier?: string; password?: string; form?: string }>({});
@@ -84,6 +84,7 @@ export function LoginScreen({
             <Text style={styles.title}>Welcome back!</Text>
             <Text style={styles.subtitle}>Sign in to continue to your account</Text>
             {notice ? <Text style={styles.notice}>{notice}</Text> : null}
+            {riderSessionNotice ? <Text style={styles.formError} accessibilityRole="alert">{riderSessionNotice}</Text> : null}
           </View>
 
           <View style={{ gap: 16 }}>

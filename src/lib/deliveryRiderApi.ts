@@ -60,6 +60,7 @@ export interface DeliveryRiderOperationalLocation {
   capturedAt: string;
   receivedAt: string;
   source: 'phone';
+  stale?: boolean;
 }
 
 export interface DeliveryRiderLocationUpdate {
@@ -117,6 +118,11 @@ export async function updateDeliveryRiderOperationalLocation(
     response,
     'Could not update your operational location.',
   );
+}
+
+export async function markDeliveryRiderLocationPending(): Promise<void> {
+  const response = await apiFetch('/delivery-rider/location/refresh', { method: 'POST' });
+  if (!response.ok) await responseData(response, 'Could not refresh your operational location.');
 }
 
 export async function acceptDeliveryOffer(

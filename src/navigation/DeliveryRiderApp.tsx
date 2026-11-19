@@ -103,31 +103,37 @@ export function DeliveryRiderApp() {
   }, [load]);
 
   const available = dashboard?.deliveryRider.availability === 'Available';
+  const hasDashboard = dashboard !== null;
   useEffect(() => {
-    if (!available || busy || refreshing) return;
+    if (loading || busy || refreshing) return;
     let pending = false;
     let active = true;
-    const refreshOffers = async () => {
-      if (pending || AppState.currentState !== 'active' || (typeof document !== 'undefined' && document.hidden)) return;
+    const refreshDashboard = async () => {
+      if (pending || AppState.currentState !== 'active' ||
+          (typeof document !== 'undefined' && document.visibilityState !== 'visible')) return;
       pending = true;
       const version = dashboardVersion.current;
       try {
         const next = await getDeliveryRiderDashboard();
-        if (active && version === dashboardVersion.current) setDashboard(next);
+        if (active && version === dashboardVersion.current) {
+          setDashboard(next);
+          if (!hasDashboard) setError('');
+        }
       } catch {
         // Explicit refresh remains available while the service is unreachable.
       } finally {
         pending = false;
       }
     };
-    const interval = setInterval(() => void refreshOffers(), 10_000);
-    const subscription = AppState.addEventListener('change', state => { if (state === 'active') void refreshOffers(); });
+    // An idle or replaced session is detected on return, even while Offline.
+    const interval = setInterval(() => void refreshDashboard(), available ? 10_000 : 30_000);
+    const subscription = AppState.addEventListener('change', state => { if (state === 'active') void refreshDashboard(); });
     return () => {
       active = false;
       clearInterval(interval);
       subscription.remove();
     };
-  }, [available, busy, refreshing]);
+  }, [available, busy, hasDashboard, loading, refreshing]);
 
   const runDashboardAction = async (action: () => Promise<DeliveryRiderDashboard>) => {
     dashboardVersion.current += 1;
