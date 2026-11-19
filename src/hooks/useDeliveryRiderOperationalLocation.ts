@@ -1,7 +1,15 @@
 import { useCallback, useEffect, useState } from 'react';
-import { AppState } from 'react-native';
+import { AppState, Platform } from 'react-native';
 import * as Location from 'expo-location';
-import { updateDeliveryRiderOperationalLocation } from '@/lib/deliveryRiderApi';
+import { markDeliveryRiderLocationPending, updateDeliveryRiderOperationalLocation } from '@/lib/deliveryRiderApi';
+
+const STATIONARY_REFRESH_MS = 45_000;
+const REFRESH_RETRY_MS = 15_000;
+
+function isForeground() {
+  return AppState.currentState === 'active' &&
+    (typeof document === 'undefined' || document.visibilityState === 'visible');
+}
 
 export type OperationalLocationState =
   | 'inactive'
@@ -84,29 +92,64 @@ export function useDeliveryRiderOperationalLocation(
 
     let active = true;
     let subscription: Location.LocationSubscription | null = null;
+    let timer: ReturnType<typeof setInterval> | undefined;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    let startedAt = 0;
+    let lastPublishedAt = 0;
+    let oneTimeFixPending = false;
+
+    const publish = async (position: Location.LocationObject) => {
+      if (!active || !isForeground() || position.timestamp < startedAt) return;
+      try {
+        const result = await sendPosition(position);
+        if (!active || !result.recorded) return;
+        lastPublishedAt = Date.now();
+        setState('tracking');
+      } catch {
+        if (active) setState('error');
+      }
+    };
+
+    const refreshStationaryPosition = async () => {
+      if (!active || !isForeground() || oneTimeFixPending || Date.now() - lastPublishedAt < STATIONARY_REFRESH_MS) return;
+      oneTimeFixPending = true;
+      try {
+        // Expo's browser provider otherwise permits an arbitrarily old cached fix.
+        const options = { accuracy: Location.Accuracy.High,
+          ...(Platform.OS === 'web' ? { maximumAge: 0, timeout: 20_000 } : {}) };
+        await publish(await Location.getCurrentPositionAsync(options));
+      } catch {
+        if (active && Date.now() - lastPublishedAt >= STATIONARY_REFRESH_MS) setState('error');
+      } finally {
+        oneTimeFixPending = false;
+      }
+    };
 
     const start = async () => {
       const granted = await ensurePermission();
       if (!granted || !active) return;
 
       try {
+        await markDeliveryRiderLocationPending();
+      } catch {
+        if (active) {
+          setState('error');
+          retry = setTimeout(() => void start(), REFRESH_RETRY_MS);
+        }
+        return;
+      }
+      try {
+        if (!active || !isForeground()) return;
+        startedAt = Date.now();
+        void refreshStationaryPosition();
+        timer = setInterval(() => void refreshStationaryPosition(), STATIONARY_REFRESH_MS);
         const watcher = await Location.watchPositionAsync(
           {
             accuracy: Location.Accuracy.High,
             timeInterval: 15_000,
             distanceInterval: 25,
           },
-          (position) => {
-            if (!active || AppState.currentState !== 'active') return;
-            void sendPosition(position)
-              .then((result) => {
-                if (!active || !result.recorded) return;
-                setState('tracking');
-              })
-              .catch(() => {
-                if (active) setState('error');
-              });
-          },
+          (position) => { void publish(position); },
         );
         // A pending watcher may finish after Offline, backgrounding or logout.
         if (active) subscription = watcher;
@@ -120,6 +163,8 @@ export function useDeliveryRiderOperationalLocation(
     return () => {
       active = false;
       subscription?.remove();
+      clearInterval(timer);
+      clearTimeout(retry);
     };
   }, [enabled, ensurePermission, appState]);
 

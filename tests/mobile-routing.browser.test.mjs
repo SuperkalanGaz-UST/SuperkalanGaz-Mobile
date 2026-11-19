@@ -43,7 +43,7 @@ after(async () => {
   if (server) await new Promise(resolve => server.close(resolve));
 });
 
-function sessionFor(role, status = 'Active', accepted = false) {
+function sessionFor(role, status = 'Active', accepted = false, sessionId = '00000000-0000-4000-8000-000000000006') {
   const user = {
     id: '00000000-0000-4000-8000-000000000001', email: 'routes@example.invalid',
     app_metadata: {
@@ -57,7 +57,7 @@ function sessionFor(role, status = 'Active', accepted = false) {
   const encode = value => Buffer.from(JSON.stringify(value)).toString('base64url');
   const expiresAt = Math.floor(Date.now() / 1000) + 3600;
   return {
-    access_token: `${encode({ alg: 'HS256', typ: 'JWT' })}.${encode({ sub: user.id, exp: expiresAt, role: 'authenticated' })}.synthetic-test-signature`,
+    access_token: `${encode({ alg: 'HS256', typ: 'JWT' })}.${encode({ sub: user.id, exp: expiresAt, role: 'authenticated', session_id: sessionId })}.synthetic-test-signature`,
     refresh_token: 'synthetic-test-only', token_type: 'bearer', expires_in: 3600, expires_at: expiresAt, user,
   };
 }
@@ -99,6 +99,9 @@ async function newContext(session, {
     }
     if (url.pathname.startsWith('/api/')) {
       requests.push({ method: request.method(), path: url.pathname });
+      if (url.pathname === '/api/auth/mobile/sign-in') return route.fulfill({ json: {
+        access_token: session.access_token, refresh_token: session.refresh_token,
+      } });
       if (url.pathname === '/api/delivery-rider/me') return route.fulfill({ json: dashboard });
       if (url.pathname === '/api/service-requests/me') return route.fulfill({ json: { serviceRequests: orders } });
       if (url.pathname === '/api/delivery-rider-invitations/session/details') return route.fulfill({ json: {
@@ -481,12 +484,20 @@ test('Delivery Rider phone GPS syncs only while Available and the app is visible
     await context.addInitScript(() => {
       window.testGpsWatchers = new Map();
       window.testGpsClears = 0;
+      window.testGpsFixRequests = 0;
+      window.testGpsLatitude = 14.275;
+      const oldTimestamp = Date.now() - 10_000;
+      navigator.geolocation.getCurrentPosition = (callback, _error, options) => {
+        if (options.maximumAge !== 0) throw new Error('Expected a fresh fix');
+        window.testGpsFixRequests++;
+        setTimeout(() => callback({ coords: { latitude: window.testGpsLatitude, longitude: 120.98, accuracy: 8 }, timestamp: Date.now() }), 50);
+      };
       let nextId = 0;
       navigator.geolocation.watchPosition = callback => {
         const id = ++nextId;
         window.testGpsWatchers.set(id, callback);
-        // Native providers deliver the first fix asynchronously.
-        setTimeout(() => callback({ coords: { latitude: 14.45, longitude: 120.98, accuracy: 8 }, timestamp: Date.now() }), 50);
+        // A watcher can initially return a cached fix. It must never replace the fresh reading.
+        setTimeout(() => callback({ coords: { latitude: 14.275, longitude: 120.98, accuracy: 8 }, timestamp: oldTimestamp }), 50);
         return id;
       };
       navigator.geolocation.clearWatch = id => {
@@ -506,7 +517,7 @@ test('Delivery Rider phone GPS syncs only while Available and the app is visible
     });
     await page.goto(`${baseUrl}/delivery-rider/home`);
     await page.getByText('Operational GPS is active for dispatch.', { exact: true }).waitFor();
-    assert.ok(samples.length > 0);
+    assert.deepEqual(samples.map(sample => sample.latitude), [14.275]);
     await page.evaluate(() => {
       Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
       document.dispatchEvent(new Event('visibilitychange'));
@@ -514,16 +525,60 @@ test('Delivery Rider phone GPS syncs only while Available and the app is visible
     await page.getByText('Operational GPS is paused. Return to the app to share your location.', { exact: true }).waitFor();
     assert.equal(await page.evaluate(() => window.testGpsWatchers.size), 0);
     await page.evaluate(() => {
+      window.testGpsLatitude = 14.5995;
       Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
       document.dispatchEvent(new Event('visibilitychange'));
     });
     await page.getByText('Operational GPS is active for dispatch.', { exact: true }).waitFor();
+    assert.deepEqual(samples.map(sample => sample.latitude), [14.275, 14.5995]);
+    assert.equal(await page.evaluate(() => window.testGpsFixRequests), 2);
     await page.getByText('Go Offline', { exact: true }).click();
     await page.getByText('Operational GPS starts when you go Available.', { exact: true }).waitFor();
     assert.equal(await page.evaluate(() => window.testGpsWatchers.size), 0);
     assert.ok(await page.evaluate(() => window.testGpsClears >= 2));
     assert.deepEqual(errors, []);
   } finally { await context.close(); }
+});
+
+test('the replaced Delivery Rider device returns to sign-in on resume', { timeout: 20_000 }, async () => {
+  const previousSession = sessionFor('driver');
+  const nextSession = sessionFor('driver', 'Active', false, '00000000-0000-4000-8000-000000000007');
+  const previous = await newContext(previousSession);
+  const next = await newContext(nextSession, { signedOut: true });
+  let authorizedToken = previousSession.access_token;
+  try {
+    for (const { context } of [previous, next]) {
+      await context.route('**/api/delivery-rider/me', route => {
+        if (route.request().headers().authorization === `Bearer ${authorizedToken}`) {
+          return route.fulfill({ json: driverDashboard() });
+        }
+        return route.fulfill({ status: 401, json: {
+          code: 'DELIVERY_RIDER_SESSION_REPLACED', message: 'This Delivery Rider session has ended. Sign in to use this device.',
+        } });
+      });
+    }
+    await next.context.route('**/api/auth/mobile/sign-in', route => {
+      assert.equal(route.request().method(), 'POST');
+      authorizedToken = nextSession.access_token;
+      return route.fulfill({ json: { access_token: authorizedToken, refresh_token: nextSession.refresh_token } });
+    });
+    await previous.page.goto(`${baseUrl}/delivery-rider/home`);
+    await previous.page.getByText('Go Available', { exact: true }).waitFor();
+    await next.page.goto(`${baseUrl}/login`);
+    await signIn(next.page);
+    await next.page.getByText('Go Available', { exact: true }).waitFor();
+    await previous.page.evaluate(() => {
+      for (const state of ['hidden', 'visible']) {
+        Object.defineProperty(document, 'visibilityState', { configurable: true, value: state });
+        document.dispatchEvent(new Event('visibilitychange'));
+      }
+    });
+    await previous.page.getByText('This Delivery Rider session has ended. Sign in to use this device.', { exact: true }).waitFor();
+    await next.page.getByText('Go Available', { exact: true }).waitFor();
+    assert.deepEqual([...previous.errors, ...next.errors], []);
+  } finally {
+    await Promise.all([previous.context.close(), next.context.close()]);
+  }
 });
 
 test('unknown and malformed order links show a missing-page state', { timeout: 30_000 }, async () => {
