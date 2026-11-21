@@ -274,15 +274,16 @@ function savedAddressFromRow(row: CustomerAddressRow): SavedAddress {
   };
 }
 
-export function OrderProcessScreen({ onNavigate, initialOrderId, onOrderPlaced }: {
+export function OrderProcessScreen({ onNavigate, initialOrderId, onOrderPlaced, onCloseTracking }: {
   onNavigate: (screen: MainScreen, opts?: { tab?: MainTab }) => void;
   initialOrderId?: string;
   onOrderPlaced: (orderId: string) => void;
+  onCloseTracking: () => void;
 }) {
   const insets = useSafeAreaInsets();
   const { session } = useAuth();
   const [selectedBranch, setSelectedBranch] = useState<BranchOption | null>(null);
-  const { prices, loading: pricesLoading, error: pricesError, refresh: refreshPrices } = useBranchPricing(selectedBranch?.id ?? null);
+  const { prices, available, loading: pricesLoading, error: pricesError, refresh: refreshPrices } = useBranchPricing(selectedBranch?.id ?? null);
   const customerName = [
     metadataText(session?.user.user_metadata?.first_name),
     metadataText(session?.user.user_metadata?.last_name),
@@ -308,9 +309,9 @@ export function OrderProcessScreen({ onNavigate, initialOrderId, onOrderPlaced }
   const products = useMemo(
     () => PRODUCT_DETAILS.flatMap((product) => {
       const price = prices[product.id];
-      return price === undefined ? [] : [{ ...product, price }];
+      return price === undefined ? [] : [{ ...product, price, availableQty: available[product.id] ?? 0 }];
     }),
-    [prices],
+    [prices, available],
   );
   const [step, setStep] = useState<Step>(initialOrderId ? 'track' : 'location');
   const [modal, setModal] = useState<ModalKind>('none');
@@ -361,7 +362,6 @@ export function OrderProcessScreen({ onNavigate, initialOrderId, onOrderPlaced }
   const [currentOrder, setCurrentOrder] = useState<OrderRow | null>(null);
   const [orderPlacedAt, setOrderPlacedAt] = useState<Date | null>(null);
   const [riderName, setRiderName] = useState<string | null>(null);
-  const closeTracking = () => onNavigate('home', { tab: 'home' });
 
   useEffect(() => {
     if (!session?.user.id || !currentOrder?.id) return;
@@ -468,6 +468,9 @@ export function OrderProcessScreen({ onNavigate, initialOrderId, onOrderPlaced }
       quantity: quantities[selectedProduct.id] ?? 0,
     }))
     .filter(({ quantity }) => quantity > 0);
+  const stockShortage = selectedProducts.some(({ product, quantity }) => quantity > product.availableQty);
+  const canOrderSelected = !pricesLoading && !pricesError && selectedProducts.length > 0 && !stockShortage;
+  const hasStock = products.some((product) => product.availableQty > 0);
   const total = selectedProducts.reduce(
     (sum, item) => sum + item.product.price * item.quantity,
     0,
@@ -574,8 +577,9 @@ export function OrderProcessScreen({ onNavigate, initialOrderId, onOrderPlaced }
       }
       return;
     }
-    if (pricesLoading || pricesError || products.length === 0) {
-      showToast('Load the selected branch’s prices before placing your order.');
+    if (!canOrderSelected) {
+      showToast('Review cylinder availability before placing your order.');
+      setStep('select');
       return;
     }
     if (deliverySchedule === 'later') {
@@ -614,6 +618,12 @@ export function OrderProcessScreen({ onNavigate, initialOrderId, onOrderPlaced }
         body: JSON.stringify(payload),
       });
       const data = await response.json();
+      if (response.status === 409) {
+        showToast(apiErrorMessage(data, 'Branch stock changed. Review your cylinder quantities.'));
+        setStep('select');
+        void refreshPrices();
+        return;
+      }
       if (!response.ok) throw new Error(apiErrorMessage(data, 'Failed to create order'));
 
       const order = data.serviceRequest as OrderRow;
@@ -669,7 +679,7 @@ export function OrderProcessScreen({ onNavigate, initialOrderId, onOrderPlaced }
     : false;
   const canContinueFromSchedule = deliverySchedule === 'now'
     || (deliverySchedule === 'later' && Boolean(scheduledTime) && hasValidScheduledDate);
-  const canPlaceOrder = Boolean(currentOrder) || canContinueFromSchedule;
+  const canPlaceOrder = Boolean(currentOrder) || (canContinueFromSchedule && canOrderSelected);
   const canContinueFromLocation = Boolean(address && selectedBranch);
 
   useEffect(() => {
@@ -705,11 +715,12 @@ export function OrderProcessScreen({ onNavigate, initialOrderId, onOrderPlaced }
     session?.user.app_metadata.status,
   ]);
 
-  const changeProductQuantity = (productId: string, amount: number) => {
-    setQuantities((current) => ({
-      ...current,
-      [productId]: Math.max(0, (current[productId] ?? 0) + amount),
-    }));
+  const changeProductQuantity = (productId: CylinderSize, amount: number) => {
+    setQuantities((current) => {
+      const next = Math.max(0, (current[productId] ?? 0) + amount);
+      if (amount > 0 && next > (available[productId] ?? 0)) return current;
+      return { ...current, [productId]: next };
+    });
   };
 
   const requestDeviceLocation = async () => {
@@ -1255,22 +1266,33 @@ export function OrderProcessScreen({ onNavigate, initialOrderId, onOrderPlaced }
               <Text style={styles.catalogRetry}>Tap to try again</Text>
             </Pressable>
           )}
+          {!pricesLoading && !pricesError && !hasStock && (
+            <Pressable accessibilityRole="button" onPress={() => void refreshPrices()} style={styles.catalogError}>
+              <Text style={styles.catalogErrorText}>This branch is out of cylinder stock.</Text>
+              <Text style={styles.catalogRetry}>Refresh stock</Text>
+            </Pressable>
+          )}
           {products.map((product) => {
             const quantity = quantities[product.id] ?? 0;
             const selected = quantity > 0;
+            const soldOut = product.availableQty === 0;
+            const atLimit = quantity >= product.availableQty;
             const rowContent = (
               <>
                 <View style={styles.productArtWrap}>
                   <Image
                     source={cylinderFor(product.label)}
-                    style={styles.productArt}
+                    style={[styles.productArt, soldOut && styles.productArtUnavailable]}
                     resizeMode="contain"
                   />
                 </View>
                 <View style={styles.productCopy}>
-                  <Text style={styles.productRowSize}>{product.label}</Text>
+                  <Text style={[styles.productRowSize, soldOut && styles.productUnavailableText]}>{product.label}</Text>
                   <Text style={styles.productRowDesc}>{product.use}</Text>
-                  <Text style={styles.productRowPrice}>{formatPeso(product.price)}</Text>
+                  <Text style={[styles.productRowPrice, soldOut && styles.productUnavailableText]}>{formatPeso(product.price)}</Text>
+                  <Text style={styles.productAvailability}>
+                    {soldOut ? 'Out of stock' : `${product.availableQty} available`}
+                  </Text>
                 </View>
 
                 {selected ? (
@@ -1291,6 +1313,8 @@ export function OrderProcessScreen({ onNavigate, initialOrderId, onOrderPlaced }
                     <Pressable
                       accessibilityRole="button"
                       accessibilityLabel={`Add one ${product.label} cylinder`}
+                      accessibilityState={{ disabled: atLimit }}
+                      disabled={atLimit}
                       hitSlop={4}
                       onPress={() => changeProductQuantity(product.id, 1)}
                       style={({ pressed }) => [
@@ -1298,10 +1322,10 @@ export function OrderProcessScreen({ onNavigate, initialOrderId, onOrderPlaced }
                         pressed ? styles.controlPressed : null,
                       ]}
                     >
-                      <Feather name="plus" size={18} color={colors.heading} />
+                      <Feather name="plus" size={18} color={atLimit ? colors.grayText : colors.heading} />
                     </Pressable>
                   </View>
-                ) : (
+                ) : !soldOut && (
                   <View style={styles.addProductButton} pointerEvents="none">
                     <Feather name="plus" size={20} color={colors.primary} />
                     <Text style={styles.addProductText}>Add</Text>
@@ -1314,7 +1338,7 @@ export function OrderProcessScreen({ onNavigate, initialOrderId, onOrderPlaced }
               return (
                 <View
                   key={product.id}
-                  style={[styles.productRow, styles.productRowSelected]}
+                  style={[styles.productRow, soldOut ? styles.productRowUnavailable : styles.productRowSelected]}
                 >
                   {rowContent}
                 </View>
@@ -1325,11 +1349,14 @@ export function OrderProcessScreen({ onNavigate, initialOrderId, onOrderPlaced }
               <Pressable
                 key={product.id}
                 accessibilityRole="button"
-                accessibilityLabel={`Select ${product.label} cylinder`}
-                accessibilityHint="Adds one cylinder to your order"
+                accessibilityLabel={soldOut ? `${product.label} cylinder, out of stock` : `Select ${product.label} cylinder`}
+                accessibilityHint={soldOut ? undefined : 'Adds one cylinder to your order'}
+                accessibilityState={{ disabled: soldOut }}
+                disabled={soldOut}
                 onPress={() => changeProductQuantity(product.id, 1)}
                 style={({ pressed }) => [
                   styles.productRow,
+                  soldOut && styles.productRowUnavailable,
                   pressed ? styles.controlPressed : null,
                 ]}
               >
@@ -1341,6 +1368,9 @@ export function OrderProcessScreen({ onNavigate, initialOrderId, onOrderPlaced }
       </ScrollView>
 
       <View style={[styles.selectSummary, { paddingBottom: Math.max(insets.bottom, 16) }]}>
+        {stockShortage && <Text accessibilityRole="alert" style={styles.catalogErrorText}>
+          Reduce the selected quantities to match this branch’s stock.
+        </Text>}
         <View style={styles.selectSummaryCount}>
           <Text style={styles.selectSummaryTotal}>
             {totalQty} {totalQty === 1 ? 'cylinder' : 'cylinders'}
@@ -1356,7 +1386,7 @@ export function OrderProcessScreen({ onNavigate, initialOrderId, onOrderPlaced }
         </View>
         <PrimaryButton
           label="Review order"
-          disabled={totalQty === 0 || pricesLoading || Boolean(pricesError)}
+          disabled={!canOrderSelected}
           onPress={() => setStep('schedule')}
         />
       </View>
@@ -1644,21 +1674,23 @@ export function OrderProcessScreen({ onNavigate, initialOrderId, onOrderPlaced }
 
   return (
     <View style={styles.flex}>
-      <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
+      <View style={[styles.header, { paddingTop: insets.top + 4 }]}>
         <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
+          style={styles.headerBack}
           onPress={() => {
-            if (step === 'track' || currentOrder) closeTracking();
+            if (step === 'track' || currentOrder) onCloseTracking();
             else if (step === 'location') onNavigate('home', { tab: 'home' });
             else if (step === 'select') setStep('location');
             else if (step === 'schedule') setStep('select');
             else if (step === 'summary') setStep('schedule');
           }}
-          hitSlop={8}
         >
           <Feather name="chevron-left" size={24} color={colors.heading} />
         </Pressable>
         <Text style={styles.headerTitle}>{headerTitle}</Text>
-        <View style={{ width: 24 }} />
+        <View style={styles.headerSpacer} />
       </View>
 
       {step === 'location' ? (
@@ -2230,10 +2262,10 @@ export function OrderProcessScreen({ onNavigate, initialOrderId, onOrderPlaced }
       </Modal>
 
       {/* Order Confirmed */}
-      <Modal visible={modal === 'confirmed'} transparent animationType="fade" onRequestClose={closeTracking}>
+      <Modal visible={modal === 'confirmed'} transparent animationType="fade" onRequestClose={onCloseTracking}>
         <View style={styles.centerBackdrop}>
           <View style={styles.confirmDialog}>
-            <Pressable style={styles.confirmClose} onPress={closeTracking} hitSlop={8}><Feather name="x" size={22} color={colors.grayText} /></Pressable>
+            <Pressable style={styles.confirmClose} onPress={onCloseTracking} hitSlop={8}><Feather name="x" size={22} color={colors.grayText} /></Pressable>
             <View style={styles.confirmCircle}><Feather name="check" size={56} color="#fff" /></View>
             <Text style={styles.confirmTitle}>Order Confirmed!</Text>
             <Text style={styles.confirmBody}>
@@ -2262,6 +2294,8 @@ export function OrderProcessScreen({ onNavigate, initialOrderId, onOrderPlaced }
 const styles = StyleSheet.create({
   flex: { flex: 1, backgroundColor: '#fff' },
   header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingBottom: 8 },
+  headerBack: { width: 48, height: 48, justifyContent: 'center' },
+  headerSpacer: { width: 48 },
   headerTitle: { flex: 1, textAlign: 'center', fontFamily: fonts.bold, fontSize: 24, color: colors.heading },
 
   stepCounter: { fontFamily: fonts.semibold, fontSize: 9, color: colors.gray, marginBottom: 4 },
@@ -2355,12 +2389,16 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.border,
   },
   productRowSelected: { backgroundColor: colors.primaryTint },
+  productRowUnavailable: { backgroundColor: colors.surfaceMuted },
   productArtWrap: { width: 96, height: 96, alignItems: 'center', justifyContent: 'center' },
   productArt: { width: 76, height: 88 },
+  productArtUnavailable: { opacity: 0.4 },
   productCopy: { flex: 1, paddingRight: 8 },
   productRowSize: { fontFamily: fonts.semibold, fontSize: 20, color: colors.heading },
   productRowDesc: { marginTop: 2, fontFamily: fonts.regular, fontSize: 12, lineHeight: 18, color: colors.grayText },
   productRowPrice: { marginTop: 3, fontFamily: fonts.semibold, fontSize: 13, color: colors.primary },
+  productUnavailableText: { color: colors.textMuted },
+  productAvailability: { marginTop: 3, fontFamily: fonts.semibold, fontSize: 12, color: colors.textMuted },
   catalogLoading: { paddingVertical: 28 },
   catalogError: { alignItems: 'center', borderRadius: radii.card, backgroundColor: '#FEF2F2', padding: 20 },
   catalogErrorText: { textAlign: 'center', fontFamily: fonts.medium, fontSize: 13, color: '#B42318' },

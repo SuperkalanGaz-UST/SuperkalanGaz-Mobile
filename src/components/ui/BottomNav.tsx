@@ -1,5 +1,5 @@
-import type { Ref } from 'react';
-import { Image, Pressable, StyleSheet, Text, View, type ViewInstance } from 'react-native';
+import type { ComponentRef, Ref } from 'react';
+import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors } from '@/theme/colors';
@@ -29,7 +29,7 @@ export function BottomNav({
 }: {
   active: MainTab;
   onNavigate: (screen: MainScreen, opts?: { tab?: MainTab }) => void;
-  guideRef?: Ref<ViewInstance>;
+  guideRef?: Ref<ComponentRef<typeof View>>;
 }) {
   const insets = useSafeAreaInsets();
   const activeOrderCount = useActiveOrderCount();

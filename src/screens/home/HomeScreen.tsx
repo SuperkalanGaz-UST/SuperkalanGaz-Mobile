@@ -1,5 +1,5 @@
-import { cylinderSummary, type ServiceRequestItem } from '@/lib/serviceRequestItems';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { cylinderSummary, serviceRequestItems, type ServiceRequestItem } from '@/lib/serviceRequestItems';
+import { useCallback, useEffect, useRef, useState, type ComponentRef } from 'react';
 import {
   AccessibilityInfo,
   Animated,
@@ -13,8 +13,6 @@ import {
   Text,
   useWindowDimensions,
   View,
-  type ScrollViewInstance,
-  type ViewInstance,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -37,6 +35,8 @@ import type { MainNavigateOptions, MainScreen, MainTab } from '@/navigation/type
 import { useIsFocused } from '@react-navigation/native';
 import { latestActiveOrder, orderProgress } from '@/lib/orderProgress';
 import { OrderProgressTracker } from '@/components/orders/OrderProgressTracker';
+
+type NativeView = ComponentRef<typeof View>;
 
 /**
  * Customer Home: integrated loyalty hero, delivery progress, and borderless
@@ -65,6 +65,7 @@ type CommercialAccountRow = {
 };
 type CommercialPurchaseRow = {
   id: string;
+  branch_id: string;
   service_request_id: string;
   cycle_number: number;
   counted_at: string;
@@ -126,6 +127,8 @@ export function HomeScreen({
   };
   const [activeOrder, setActiveOrder] = useState<ActiveOrderRow | null>(null);
   const activeProgress = activeOrder ? orderProgress(activeOrder.status) : null;
+  const activeItems = activeOrder ? serviceRequestItems(activeOrder) : [];
+  const mixedActiveOrder = activeItems.length > 1;
 
   useEffect(() => {
     if (!focused) return;
@@ -155,6 +158,7 @@ export function HomeScreen({
   // Sync Loyalty State
   const [points, setPoints] = useState(0);
   const [catalog, setCatalog] = useState<LoyaltyCatalogItem[]>([]);
+  const [pickupBranches, setPickupBranches] = useState<{ id: string; name: string }[]>([]);
   const [history, setHistory] = useState<HouseholdHistoryRow[]>([]);
   const [activeCodes, setActiveCodes] = useState<LoyaltyRedemptionRow[]>([]);
   const [recentRedemptions, setRecentRedemptions] = useState<LoyaltyRedemptionRow[]>([]);
@@ -168,7 +172,7 @@ export function HomeScreen({
     const timeout = setTimeout(() => controller.abort(), 10000);
     try {
       const [catResult, meResult] = await Promise.allSettled([
-        apiFetch('/loyalty/catalog', { signal: controller.signal }),
+        apiFetch('/loyalty/catalog?byPickupBranch=true', { signal: controller.signal }),
         apiFetch('/loyalty/me', { signal: controller.signal }),
       ]);
       clearTimeout(timeout);
@@ -176,8 +180,12 @@ export function HomeScreen({
       const errors: string[] = [];
 
       if (catResult.status === 'fulfilled' && catResult.value.ok) {
-        const catData = (await catResult.value.json()) as { catalogItems?: LoyaltyCatalogItem[] };
+        const catData = (await catResult.value.json()) as {
+          catalogItems?: LoyaltyCatalogItem[];
+          pickup_branches?: { id: string; name: string }[];
+        };
         setCatalog(catData.catalogItems ?? []);
+        setPickupBranches(catData.pickup_branches ?? []);
       } else if (catResult.status === 'fulfilled') {
         errors.push(`Catalog ${catResult.value.status}`);
       } else {
@@ -243,15 +251,15 @@ export function HomeScreen({
   const orbitSize = Math.min(170, winW * 0.43);
   const cylinderWidth = Math.min(138, winW * 0.35);
 
-  const scrollRef = useRef<ScrollViewInstance>(null);
+  const scrollRef = useRef<ComponentRef<typeof ScrollView>>(null);
   const scrollOffset = useRef(0);
   const updateScrolledSpotlight = useRef<((offset: number) => void) | null>(null);
-  const rewardsRef = useRef<ViewInstance>(null);
-  const activeOrdersRef = useRef<ViewInstance>(null);
-  const reorderRef = useRef<ViewInstance>(null);
-  const quickRef = useRef<ViewInstance>(null);
-  const navRef = useRef<ViewInstance>(null);
-  const helpRef = useRef<ViewInstance>(null);
+  const rewardsRef = useRef<NativeView>(null);
+  const activeOrdersRef = useRef<NativeView>(null);
+  const reorderRef = useRef<NativeView>(null);
+  const quickRef = useRef<NativeView>(null);
+  const navRef = useRef<NativeView>(null);
+  const helpRef = useRef<NativeView>(null);
   const guideTarget = GUIDE_STEPS[guideStep].target;
   const showingHistory = focused && guideOpen && guideTarget === 'active-orders';
   const guidePage = showingHistory ? 'history' : 'home';
@@ -334,8 +342,7 @@ export function HomeScreen({
       if (isScrollTarget) {
         const scroll = scrollRef.current;
         const viewport = scroll?.getNativeScrollRef();
-        const content = scroll?.getInnerViewRef();
-        if (!scroll || !viewport || !content) {
+        if (!scroll || !viewport) {
           nextFrame();
           return;
         }
@@ -356,6 +363,13 @@ export function HomeScreen({
           if (Math.abs(scrollport.scrollTop - destination) <= 1) publish();
           else scrollFallback = setTimeout(publish, 450);
           scroll.scrollTo({ y: destination, animated: false });
+          return;
+        }
+
+        // React Native's measureLayout requires the native content view ref.
+        const content: NativeView | null = scroll.getInnerViewRef();
+        if (!content) {
+          nextFrame();
           return;
         }
 
@@ -436,9 +450,15 @@ export function HomeScreen({
     else setGuideStep(guideStep + 1);
   };
   const guideBack = () => setGuideStep(Math.max(0, guideStep - 1));
+  const closeGuide = useCallback(() => setGuideOpen(false), []);
+  const guideBlocksHome = Platform.OS === 'android' && focused && guideOpen;
 
-  return (
-    <View style={styles.flex}>
+  const screen = (
+    <View
+      style={styles.flex}
+      pointerEvents={guideBlocksHome ? 'none' : 'auto'}
+      importantForAccessibility={guideBlocksHome ? 'no-hide-descendants' : 'auto'}
+    >
       {activeTab === 'rewards' ? (
         <>
           <AppHeader
@@ -452,6 +472,7 @@ export function HomeScreen({
             onExit={() => onNavigate('home')}
             points={points}
             catalog={catalog}
+            pickupBranches={pickupBranches}
             history={history}
             activeCodes={activeCodes}
             recentRedemptions={recentRedemptions}
@@ -600,21 +621,40 @@ export function HomeScreen({
                     style={({ pressed }) => [styles.activeOrder, pressed && { opacity: 0.85 }]}
                     accessibilityRole="button"
                     accessibilityLabel="View active order status"
+                    accessibilityHint={cylinderSummary(activeOrder)}
                     onPress={() => onNavigate('order-process', { orderId: activeOrder.id })}
                   >
                     <View style={styles.activeTopRow}>
                       <View style={styles.activeProduct}>
-                        <Image
-                          source={cylinderFor(activeOrder.cylinder_size)}
-                          style={styles.activeCylinder}
-                          resizeMode="contain"
-                        />
-                        <Text style={styles.activeProductText}>{cylinderSummary(activeOrder)}</Text>
+                        {mixedActiveOrder ? (
+                          <Feather name="package" size={22} color={colors.primary} />
+                        ) : (
+                          <Image
+                            source={cylinderFor(activeOrder.cylinder_size)}
+                            style={styles.activeCylinder}
+                            resizeMode="contain"
+                          />
+                        )}
+                        <Text style={styles.activeProductText}>
+                          {mixedActiveOrder
+                            ? `${activeItems.reduce((total, item) => total + item.quantity, 0)} cylinders`
+                            : cylinderSummary(activeOrder)}
+                        </Text>
                       </View>
                       <Text style={styles.activeStatus}>
                         {activeProgress.label}
                       </Text>
                     </View>
+
+                    {mixedActiveOrder && (
+                      <View style={styles.activeItems}>
+                        {activeItems.map(item => (
+                          <Text key={item.cylinder_size} style={styles.activeItem}>
+                            {item.quantity} × {item.cylinder_size.replace(/kg$/i, ' kg')}
+                          </Text>
+                        ))}
+                      </View>
+                    )}
 
                     <OrderProgressTracker status={activeOrder.status} active={focused && activeTab === 'home'} />
                   </Pressable>
@@ -699,7 +739,12 @@ export function HomeScreen({
           <OrdersScreen onNavigate={onNavigate} activeOrdersRef={activeOrdersRef} />
         </Animated.View>
       )}
+    </View>
+  );
 
+  return (
+    <View style={styles.flex}>
+      {screen}
       {focused && (
         <AppGuideOverlay
           visible={guideOpen}
@@ -709,7 +754,7 @@ export function HomeScreen({
           reduceMotion={reduceGuideMotion}
           onNext={guideNext}
           onBack={guideBack}
-          onClose={() => setGuideOpen(false)}
+          onClose={closeGuide}
         />
       )}
     </View>
@@ -719,7 +764,7 @@ export function HomeScreen({
 const styles = StyleSheet.create({
   flex: { flex: 1, backgroundColor: '#fff' },
   sheet: { flex: 1, backgroundColor: colors.primary },
-  scrollContent: { paddingBottom: 130, backgroundColor: '#fff' },
+  scrollContent: { flexGrow: 1, paddingBottom: 130, backgroundColor: colors.surface },
 
   homeHero: {
     backgroundColor: '#fff',
@@ -801,10 +846,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
   },
-  activeProduct: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  activeProduct: { flexDirection: 'row', alignItems: 'center', gap: 10, flexShrink: 1 },
   activeCylinder: { width: 28, height: 44 },
   activeProductText: { fontFamily: fonts.semibold, fontSize: 14, color: colors.heading },
   activeStatus: { fontFamily: fonts.semibold, fontSize: 12, color: colors.success },
+  activeItems: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 2, marginBottom: 12 },
+  activeItem: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, backgroundColor: colors.primaryTint, color: colors.heading, fontFamily: fonts.medium, fontSize: 12 },
   timeline: { height: 18, marginHorizontal: 12, marginTop: 6, justifyContent: 'center' },
   timelineBase: {
     position: 'absolute',

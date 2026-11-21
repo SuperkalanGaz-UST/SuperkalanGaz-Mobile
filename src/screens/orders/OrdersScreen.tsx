@@ -1,5 +1,5 @@
 import { serviceRequestItems, type ServiceRequestCylinderFields } from '@/lib/serviceRequestItems';
-import { type Ref, useCallback, useEffect, useMemo, useState } from 'react';
+import { type ComponentRef, type Ref, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Image,
   Pressable,
@@ -7,7 +7,6 @@ import {
   StyleSheet,
   Text,
   View,
-  type ViewInstance,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import * as WebBrowser from 'expo-web-browser';
@@ -57,7 +56,7 @@ WebBrowser.maybeCompleteAuthSession();
 
 export function OrdersScreen({ onNavigate, activeOrdersRef }: {
   onNavigate: (screen: MainScreen, opts?: MainNavigateOptions) => void;
-  activeOrdersRef?: Ref<ViewInstance>;
+  activeOrdersRef?: Ref<ComponentRef<typeof View>>;
 }) {
   const { session } = useAuth();
   const customerId = session?.user.id ?? null;

@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { uuid } from 'expo-modules-core';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Image, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { colors } from '@/theme/colors';
 import { fonts } from '@/theme/fonts';
@@ -10,6 +10,7 @@ import { images } from '@/lib/assets';
 import { API_URL } from '@/constants/config';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiFetch, apiErrorMessage } from '@/lib/api';
+import { BottomSheetModal } from '@/components/ui/overlays';
 
 /**
  * Rewards surface (Figma "MyRewards / AllRewards / ActiveCodes"). Rendered inside
@@ -35,6 +36,7 @@ type CommercialAccount = {
 };
 type CommercialPurchase = {
   id: string;
+  branch_id: string;
   service_request_id: string;
   cycle_number: number;
   counted_at: string;
@@ -55,6 +57,57 @@ type ActiveRedemption = {
   redemption_code: string | null;
   status: string;
 };
+
+type PickupBranch = { id: string; name: string; detail?: string };
+
+function selectedPickupBranch(branches: PickupBranch[], branchId: string | null): PickupBranch | undefined {
+  return branches.find((branch) => branch.id === branchId) ?? (branches.length === 1 ? branches[0] : undefined);
+}
+
+function PickupBranchPicker({ branches, selectedId, onSelect }: {
+  branches: PickupBranch[];
+  selectedId?: string;
+  onSelect: (id: string) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const selected = branches.find((branch) => branch.id === selectedId);
+  const canChoose = branches.length > 1;
+  return (
+    <View style={styles.branchPicker}>
+      <Text style={styles.branchLabel}>Pickup branch</Text>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={selected ? `Pickup branch: ${selected.name}` : 'Choose a pickup branch'}
+        accessibilityState={{ expanded, disabled: !canChoose }}
+        disabled={!canChoose}
+        onPress={() => setExpanded(!expanded)}
+        style={styles.branchButton}
+      >
+        <Feather name="map-pin" size={18} color={colors.primary} />
+        <Text style={styles.branchName}>{selected?.name ?? (canChoose ? 'Choose a pickup branch' : 'No eligible branches yet')}</Text>
+        {canChoose && <Feather name={expanded ? 'chevron-up' : 'chevron-down'} size={18} color={colors.primary} />}
+      </Pressable>
+      {expanded && canChoose && <View accessibilityRole="radiogroup" accessibilityLabel="Pickup branches" style={styles.branchOptions}>
+        {branches.map((branch) => (
+          <Pressable
+            key={branch.id}
+            accessibilityRole="radio"
+            accessibilityLabel={branch.detail ? `${branch.name}, ${branch.detail}` : branch.name}
+            accessibilityState={{ checked: branch.id === selectedId }}
+            onPress={() => { onSelect(branch.id); setExpanded(false); }}
+            style={styles.branchOption}
+          >
+            <View style={{ flex: 1 }}>
+              <Text style={styles.branchOptionName}>{branch.name}</Text>
+              {!!branch.detail && <Text style={styles.branchDetail}>{branch.detail}</Text>}
+            </View>
+            {branch.id === selectedId && <Feather name="check" size={18} color={colors.primary} />}
+          </Pressable>
+        ))}
+      </View>}
+    </View>
+  );
+}
 
 /** Display a bundled reward image when the catalog item matches it. */
 const REWARD_IMAGES: Record<string, number> = {
@@ -98,15 +151,17 @@ function RewardCard({
   );
 }
 
-function RewardImage({ image, photoPath }: { image: number | null; photoPath?: string | null }) {
+function RewardImage({ image, photoPath, preview = false }: {
+  image: number | null; photoPath?: string | null; preview?: boolean;
+}) {
   const [failed, setFailed] = useState(false);
   const source = photoPath?.startsWith('/loyalty/catalog/photos/') && !failed
     ? { uri: `${API_URL}/api${photoPath}` }
     : image;
   return source ? (
-    <Image source={source} style={styles.rewardImg} resizeMode="contain" onError={() => setFailed(true)} />
+    <Image source={source} style={preview ? styles.rewardPreview : styles.rewardImg} resizeMode="contain" onError={() => setFailed(true)} />
   ) : (
-    <View style={[styles.rewardImg, { alignItems: 'center', justifyContent: 'center' }]}>
+    <View style={[preview ? styles.rewardPreview : styles.rewardImg, { alignItems: 'center', justifyContent: 'center' }]}>
       <Feather name="gift" size={32} color={colors.primary} />
     </View>
   );
@@ -130,18 +185,24 @@ function CommercialRewardsScreen({
   const [showAllHistory, setShowAllHistory] = useState(false);
   const [redeeming, setRedeeming] = useState(false);
   const [redeemError, setRedeemError] = useState<string | null>(null);
-  const account = [...accounts].sort(
-    (a, b) =>
-      b.completed_cycles - a.completed_cycles ||
-      b.current_cycle_count - a.current_cycle_count,
-  )[0];
+  const [branchId, setBranchId] = useState<string | null>(null);
+  const branches = accounts.flatMap((account) => account.branch_name ? [{
+    id: account.branch_id,
+    name: account.branch_name,
+    detail: account.completed_cycles > 0
+      ? `${account.completed_cycles} free cylinder${account.completed_cycles === 1 ? '' : 's'} available`
+      : `${account.current_cycle_count} of 30 qualifying purchases`,
+  }] : []);
+  const selected = selectedPickupBranch(branches, branchId);
+  const account = accounts.find((entry) => entry.branch_id === selected?.id);
   const purchaseCount = account?.current_cycle_count ?? 0;
   const remaining = Math.max(0, COMMERCIAL_PURCHASE_TARGET - purchaseCount);
   const progressWidth: `${number}%` = `${Math.min(
     100,
     (purchaseCount / COMMERCIAL_PURCHASE_TARGET) * 100,
   )}%`;
-  const history = showAllHistory ? purchases : purchases.slice(0, 3);
+  const branchPurchases = purchases.filter((purchase) => purchase.branch_id === selected?.id);
+  const history = showAllHistory ? branchPurchases : branchPurchases.slice(0, 3);
   const availableRewards = account?.completed_cycles ?? 0;
 
   const requestReward = async () => {
@@ -182,113 +243,130 @@ function CommercialRewardsScreen({
 
       {loyaltyError ? <Text style={styles.commercialApprovalNote}>{loyaltyError}</Text> : null}
 
-      <View style={styles.commercialSummary}>
-        <Text style={styles.commercialCount}>
-          {purchaseCount}{' '}
-          <Text style={styles.commercialCountOf}>of {COMMERCIAL_PURCHASE_TARGET}</Text>
-        </Text>
-        <Text style={styles.commercialCountLabel}>{account?.branch_name ?? 'No branch purchases yet'}</Text>
-        <Text style={styles.commercialCountLabel}>qualifying purchases</Text>
-        <View
-          accessible
-          accessibilityRole="progressbar"
-          accessibilityLabel={`${purchaseCount} of ${COMMERCIAL_PURCHASE_TARGET} qualifying purchases`}
-          style={styles.commercialProgressTrack}
-        >
-          <View style={[styles.commercialProgressFill, { width: progressWidth }]} />
-        </View>
-        <Text style={styles.commercialRemaining}>{remaining} purchases remaining</Text>
-        <Text
-          adjustsFontSizeToFit
-          minimumFontScale={0.85}
-          numberOfLines={1}
-          style={styles.commercialDescription}
-        >
-          Complete 30 qualifying purchases to earn 1 free cylinder.
-        </Text>
-        <Text
-          adjustsFontSizeToFit
-          minimumFontScale={0.85}
-          numberOfLines={1}
-          style={styles.commercialApprovalNote}
-        >
-          Branch Manager approval applies when Dual Authorization is on.
-        </Text>
-      </View>
+      <PickupBranchPicker branches={branches} selectedId={selected?.id} onSelect={(id) => {
+        if (redeeming) return;
+        setBranchId(id);
+        setRedeemError(null);
+        setShowAllHistory(false);
+      }} />
 
-      <View style={styles.commercialDivider} />
-
-      <View style={styles.commercialSectionRow}>
-        <Text style={styles.commercialSectionTitle}>Purchase Progress</Text>
-        <Pressable
-          accessibilityRole="button"
-          onPress={() => setShowAllHistory((current) => !current)}
-          hitSlop={8}
-        >
-          <Text style={styles.link}>{showAllHistory ? 'Show Less' : 'View All'}</Text>
-        </Pressable>
-      </View>
-
-      {history.length === 0 ? (
-        <Text style={styles.commercialHistoryDate}>No counted purchases yet.</Text>
-      ) : history.map((row, index) => (
-        <View key={row.id}>
-          <View style={styles.commercialHistoryRow}>
-            <View
-              style={[
-                styles.commercialHistoryIcon,
-              ]}
-            >
-              <Feather
-                name="check"
-                size={16}
-                color="#fff"
-              />
-            </View>
-            <View style={styles.commercialHistoryCopy}>
-              <Text style={styles.commercialHistoryLabel}>Qualifying purchase</Text>
-              <Text style={styles.commercialHistoryDate}>{new Date(row.counted_at).toLocaleDateString()}</Text>
-            </View>
-            <Text
-              style={[
-                styles.commercialHistoryValue,
-              ]}
-            >
-              +1
-            </Text>
+      {account && <>
+        <View style={styles.commercialSummary}>
+          <Text style={styles.commercialCount}>
+            {purchaseCount}{' '}
+            <Text style={styles.commercialCountOf}>of {COMMERCIAL_PURCHASE_TARGET}</Text>
+          </Text>
+          <Text style={styles.commercialCountLabel}>{account?.branch_name ?? 'No branch purchases yet'}</Text>
+          <Text style={styles.commercialCountLabel}>qualifying purchases</Text>
+          <View
+            accessible
+            accessibilityRole="progressbar"
+            accessibilityLabel={`${purchaseCount} of ${COMMERCIAL_PURCHASE_TARGET} qualifying purchases`}
+            style={styles.commercialProgressTrack}
+          >
+            <View style={[styles.commercialProgressFill, { width: progressWidth }]} />
           </View>
-          {index < history.length - 1 && <View style={styles.hair} />}
+          <Text style={styles.commercialRemaining}>{remaining} purchases remaining</Text>
+          <Text
+            adjustsFontSizeToFit
+            minimumFontScale={0.85}
+            numberOfLines={1}
+            style={styles.commercialDescription}
+          >
+            Complete 30 qualifying purchases to earn 1 free cylinder.
+          </Text>
+          <Text
+            adjustsFontSizeToFit
+            minimumFontScale={0.85}
+            numberOfLines={1}
+            style={styles.commercialApprovalNote}
+          >
+            Branch Manager approval applies when Dual Authorization is on.
+          </Text>
         </View>
-      ))}
 
-      <Text style={styles.commercialRewardTitle}>Your Reward</Text>
-      <View style={styles.commercialRewardCard}>
-        <Text style={styles.commercialRewardName}>1 free cylinder</Text>
-        <Text style={styles.commercialRewardDescription}>
-          {availableRewards} free cylinder reward(s) available
-        </Text>
-        {redeemError ? <Text style={styles.commercialApprovalNote}>{redeemError}</Text> : null}
-        <Pressable
-          accessibilityRole="button"
-          accessibilityState={{ disabled: availableRewards < 1 || redeeming }}
-          disabled={availableRewards < 1 || redeeming}
-          style={styles.commercialRewardButton}
-          onPress={requestReward}
-        >
-          <Text style={styles.commercialRewardButtonText}>
-            {redeeming
-              ? 'Requesting…'
-              : availableRewards > 0
-                ? 'Request free cylinder'
-                : `${remaining} purchases remaining`}
+        <View style={styles.commercialDivider} />
+
+        <View style={styles.commercialSectionRow}>
+          <Text style={styles.commercialSectionTitle}>Purchase Progress</Text>
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => setShowAllHistory((current) => !current)}
+            hitSlop={8}
+          >
+            <Text style={styles.link}>{showAllHistory ? 'Show Less' : 'View All'}</Text>
+          </Pressable>
+        </View>
+
+        {history.length === 0 ? (
+          <Text style={styles.commercialHistoryDate}>No counted purchases yet.</Text>
+        ) : history.map((row, index) => (
+          <View key={row.id}>
+            <View style={styles.commercialHistoryRow}>
+              <View
+                style={[
+                  styles.commercialHistoryIcon,
+                ]}
+              >
+                <Feather
+                  name="check"
+                  size={16}
+                  color="#fff"
+                />
+              </View>
+              <View style={styles.commercialHistoryCopy}>
+                <Text style={styles.commercialHistoryLabel}>Qualifying purchase</Text>
+                <Text style={styles.commercialHistoryDate}>{new Date(row.counted_at).toLocaleDateString()}</Text>
+              </View>
+              <Text
+                style={[
+                  styles.commercialHistoryValue,
+                ]}
+              >
+                +1
+              </Text>
+            </View>
+            {index < history.length - 1 && <View style={styles.hair} />}
+          </View>
+        ))}
+
+        <Text style={styles.commercialRewardTitle}>Your Reward</Text>
+        <View style={styles.commercialRewardCard}>
+          <Text style={styles.commercialRewardName}>1 free cylinder</Text>
+          <Text style={styles.commercialRewardDescription}>
+            {availableRewards} free cylinder reward(s) available
           </Text>
-        </Pressable>
-        {activeCodes.length > 0 ? (
-          <Text style={styles.commercialApprovalNote}>
-            {activeCodes.length} active commercial redemption(s)
-          </Text>
-        ) : null}
-      </View>
+          {redeemError ? <Text style={styles.commercialApprovalNote}>{redeemError}</Text> : null}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ disabled: availableRewards < 1 || redeeming || !!loyaltyError }}
+            disabled={availableRewards < 1 || redeeming || !!loyaltyError}
+            style={styles.commercialRewardButton}
+            onPress={requestReward}
+          >
+            <Text style={styles.commercialRewardButtonText}>
+              {redeeming
+                ? 'Requesting…'
+                : availableRewards > 0
+                  ? 'Request free cylinder'
+                  : `${remaining} purchases remaining`}
+            </Text>
+          </Pressable>
+        </View>
+      </>}
+      {!!activeCodes.length && <>
+        <Text style={styles.commercialRewardTitle}>Active redemptions</Text>
+        {activeCodes.map((entry) => (
+          <View key={entry.id} style={styles.commercialRewardCard}>
+            <Text style={styles.commercialRewardName}>1 free cylinder</Text>
+            <Text style={styles.branchDetail}>{entry.branch_name ?? 'Issuing branch'}</Text>
+            {entry.status === 'approved' && entry.redemption_code ? <>
+              <Text style={styles.branchLabel}>Ready for Pickup</Text>
+              <Text style={styles.histPts} selectable>{entry.redemption_code}</Text>
+            </> : <Text style={styles.branchDetail}>{entry.status === 'approved' ? 'Ready for Pickup' : 'Pending approval'}</Text>}
+          </View>
+        ))}
+      </>}
     </ScrollView>
   );
 }
@@ -298,6 +376,7 @@ export function RewardsScreen({
   initialSub = 'my',
   points,
   catalog,
+  pickupBranches,
   history,
   activeCodes,
   recentRedemptions,
@@ -310,6 +389,7 @@ export function RewardsScreen({
   initialSub?: Sub;
   points: number;
   catalog: LoyaltyCatalogItem[];
+  pickupBranches: PickupBranch[];
   history: HistoryRow[];
   activeCodes: ActiveRedemption[];
   recentRedemptions: ActiveRedemption[];
@@ -320,8 +400,11 @@ export function RewardsScreen({
 }) {
   const { accountType, session } = useAuth();
   const [sub, setSub] = useState<Sub>(initialSub);
+  const [branchId, setBranchId] = useState<string | null>(null);
   const [redeemItem, setRedeemItem] = useState<LoyaltyCatalogItem | null>(null);
+  const [redeemOpen, setRedeemOpen] = useState(false);
   const [selectedCode, setSelectedCode] = useState<ActiveRedemption | null>(null);
+  const [codeOpen, setCodeOpen] = useState(false);
   const [recentlyIssued, setRecentlyIssued] = useState<ActiveRedemption | null>(null);
   const submitting = useRef(false);
 
@@ -344,7 +427,7 @@ export function RewardsScreen({
       await AsyncStorage.setItem(submissionKey, submissionId);
       const res = await apiFetch('/loyalty/me/redemptions', {
         method: 'POST',
-        body: JSON.stringify({ catalogItemId: itemId, submissionId, expectedPointsCost: redeemItem.points_cost }),
+        body: JSON.stringify({ catalogItemId: itemId, branchId: redeemItem.branch_id, submissionId, expectedPointsCost: redeemItem.points_cost }),
       });
       const data = await res.json().catch(() => null);
       if (!res.ok) {
@@ -359,9 +442,10 @@ export function RewardsScreen({
       }
       await AsyncStorage.removeItem(submissionKey);
       await AsyncStorage.removeItem(legacySubmissionKey);
-      setRedeemItem(null);
+      setRedeemOpen(false);
       setRecentlyIssued(redemption);
       setSelectedCode(redemption);
+      setCodeOpen(true);
       setSub('activeCodes');
       onRefresh();
     } catch {
@@ -374,8 +458,7 @@ export function RewardsScreen({
 
   const closeRedeemSheet = () => {
     if (submitting.current) return;
-    setRedeemItem(null);
-    setRedeemError(null);
+    setRedeemOpen(false);
   };
   const renderReward = (item: LoyaltyCatalogItem) => {
     const inStock = item.stock_qty > 0;
@@ -388,6 +471,8 @@ export function RewardsScreen({
         onPress={inStock && affordable && !loyaltyError ? () => {
           setRedeemError(null);
           setRedeemItem(item);
+          setSelectedCode(null);
+          setRedeemOpen(true);
         } : undefined}
       />
     );
@@ -412,6 +497,11 @@ export function RewardsScreen({
     ? [recentlyIssued] : [];
   const pickupCodes = [...issued, ...activeCodes].filter((entry) => entry.status === 'approved' && entry.redemption_code);
   const viewedCode = [...recentRedemptions, ...pickupCodes, ...issued].find((entry) => entry.id === selectedCode?.id);
+  const selectedBranch = selectedPickupBranch(pickupBranches, branchId);
+  const branchCatalog = catalog.filter((item) => item.branch_id === selectedBranch?.id);
+  const pickupSelector = <PickupBranchPicker branches={pickupBranches} selectedId={selectedBranch?.id} onSelect={setBranchId} />;
+  const emptyCatalog = selectedBranch ? 'No rewards available at this branch yet.' : 'Choose a pickup branch to see its rewards.';
+  const closeSheet = redeemOpen ? closeRedeemSheet : () => setCodeOpen(false);
 
   return (
     <View style={styles.sheet}>
@@ -435,8 +525,9 @@ export function RewardsScreen({
           ) : null}
           <Text style={styles.pointsBig}>{points} points</Text>
           <Text style={styles.blurb}>
-            Earn points for delivered cylinder purchases at any branch. Your points are shared across branches and expire 12 months after they are earned. Your pickup branch is assigned automatically based on recent orders and stock.
+            Earn points for delivered cylinder purchases at any branch. Your points are shared across branches and expire 12 months after they are earned.
           </Text>
+          {pickupSelector}
 
           <View style={styles.sectionRow}>
             <Pressable accessibilityRole="button" onPress={() => { setSub('activeCodes'); onRefresh(); }}>
@@ -476,13 +567,13 @@ export function RewardsScreen({
           )}
 
           <Text style={[styles.title, { marginTop: 24, marginBottom: 12 }]}>Claim Your Reward!</Text>
-          {catalog.length === 0 ? (
+          {branchCatalog.length === 0 ? (
             <View style={{ paddingVertical: 24, alignItems: 'center' }}>
-              <Text style={{ fontFamily: fonts.regular, fontSize: 14, color: colors.grayText }}>No rewards available yet. Check back soon!</Text>
+              <Text style={{ fontFamily: fonts.regular, fontSize: 14, color: colors.grayText }}>{emptyCatalog}</Text>
             </View>
           ) : (
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 12 }}>
-              {catalog.map((item) => (
+              {branchCatalog.map((item) => (
                 <View key={item.id} style={{ width: 146 }}>
                   {renderReward(item)}
                 </View>
@@ -504,14 +595,15 @@ export function RewardsScreen({
             </View>
             <Text style={styles.title}>{points} pts</Text>
           </View>
+          {pickupSelector}
           <Text style={styles.redeemHead}>Redeem with your points</Text>
-          {catalog.length === 0 ? (
+          {branchCatalog.length === 0 ? (
             <View style={{ paddingVertical: 32, alignItems: 'center' }}>
-              <Text style={{ fontFamily: fonts.regular, fontSize: 14, color: colors.grayText }}>No rewards available yet. Check back soon!</Text>
+              <Text style={{ fontFamily: fonts.regular, fontSize: 14, color: colors.grayText }}>{emptyCatalog}</Text>
             </View>
           ) : (
             <View style={styles.grid}>
-              {catalog.map((item) => (
+              {branchCatalog.map((item) => (
                 <View key={item.id} style={styles.gridItem}>
                   {renderReward(item)}
                 </View>
@@ -531,7 +623,7 @@ export function RewardsScreen({
           </View>
           {!pickupCodes.length && <Text style={styles.blurb}>You have no rewards waiting for pickup.</Text>}
           {pickupCodes.map((entry) => (
-            <Pressable key={entry.id} accessibilityRole="button" onPress={() => setSelectedCode(entry)} style={styles.histRow}>
+            <Pressable key={entry.id} accessibilityRole="button" onPress={() => { setSelectedCode(entry); setCodeOpen(true); }} style={styles.histRow}>
               <Feather name="gift" size={20} color={colors.primary} />
               <View style={{ flex: 1 }}>
                 <Text style={styles.histType}>{entry.catalog_item_name}</Text>
@@ -560,49 +652,49 @@ export function RewardsScreen({
         </ScrollView>
       )}
 
-      {/* Redeem confirm sheet */}
-      <Modal visible={!!redeemItem} transparent animationType="slide" onRequestClose={closeRedeemSheet}>
-        <Pressable style={styles.sheetBackdrop} onPress={closeRedeemSheet} />
-        <View style={styles.bottomSheet}>
-          <View style={styles.sheetHead}>
-            <Text style={styles.sheetTitle}>{redeemItem?.name}</Text>
-            <Pressable onPress={closeRedeemSheet} hitSlop={8}>
-              <Feather name="x" size={18} color={colors.gray} />
-            </Pressable>
-          </View>
-          <View style={[styles.ptsPill, { alignSelf: 'flex-start', marginBottom: 20 }]}>
-            <Text style={styles.ptsPillText}>{redeemItem?.points_cost} pts</Text>
-          </View>
-          {!!redeemItem?.branch_name && <Text style={styles.blurb}>Pickup at {redeemItem.branch_name}</Text>}
-          {redeemError ? (
-            <View style={{ backgroundColor: '#FEF2F2', borderRadius: 8, padding: 12, marginBottom: 16, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-              <Feather name="alert-circle" size={16} color={colors.danger} />
-              <Text style={{ fontFamily: fonts.regular, fontSize: 13, color: colors.danger, flex: 1 }}>{redeemError}</Text>
-            </View>
-          ) : null}
-          <Pressable style={styles.solidBtn} onPress={handleRedeem} disabled={loading}>
-            <Text style={styles.solidBtnText}>{loading ? 'REDEEMING...' : 'REDEEM'}</Text>
-          </Pressable>
-        </View>
-      </Modal>
-
-      <Modal visible={!!viewedCode} transparent animationType="fade" onRequestClose={() => setSelectedCode(null)}>
-        <View style={styles.centerBackdrop}>
-          <View style={styles.successCard}>
-            <Text style={styles.successTitle}>{viewedCode?.status === 'fulfilled' ? 'Redeemed' : 'Ready for Pickup'}</Text>
-            <Text style={styles.successNote}>{viewedCode?.catalog_item_name}</Text>
-            {viewedCode?.status === 'approved' && (
-              <>
+      <BottomSheetModal visible={redeemOpen || (codeOpen && !!viewedCode)} onClose={closeSheet} testID="reward-sheet" style={styles.bottomSheet}>
+        <ScrollView contentContainerStyle={styles.sheetContent} showsVerticalScrollIndicator={false}>
+          {!redeemOpen && viewedCode ? (
+            <View style={styles.successCard}>
+              <Text style={styles.successTitle}>{viewedCode.status === 'fulfilled' ? 'Redeemed' : 'Ready for Pickup'}</Text>
+              <Text style={styles.successNote}>{viewedCode.catalog_item_name}</Text>
+              {viewedCode.status === 'approved' && <>
                 <Text style={styles.successCode} selectable>{viewedCode.redemption_code}</Text>
                 <Text style={styles.successNote}>Show this code to the Branch Manager at {viewedCode.branch_name ?? 'the issuing branch'}.</Text>
-              </>
-            )}
-            <Pressable accessibilityRole="button" onPress={() => setSelectedCode(null)} style={{ marginTop: 16 }}>
-              <Text style={styles.link}>Done</Text>
+              </>}
+              <Pressable accessibilityRole="button" onPress={() => setCodeOpen(false)} style={styles.solidBtn}>
+                <Text style={styles.solidBtnText}>Done</Text>
+              </Pressable>
+            </View>
+          ) : redeemItem && <>
+            <View style={styles.sheetHead}>
+              <Text style={styles.sheetTitle}>{redeemItem.name}</Text>
+              <Pressable accessibilityRole="button" accessibilityLabel="Close reward" onPress={closeRedeemSheet} disabled={loading} hitSlop={8}>
+                <Feather name="x" size={18} color={colors.gray} />
+              </Pressable>
+            </View>
+            <View style={styles.previewFrame} testID="reward-preview">
+              <RewardImage key={redeemItem.id} image={rewardImageFor(redeemItem.name)} photoPath={redeemItem.photo_path} preview />
+            </View>
+            <View style={styles.claimSummary}>
+              <View style={styles.pickupSummary}>
+                <Text style={styles.branchLabel}>Pickup branch</Text>
+                <Text style={styles.branchOptionName}>{redeemItem.branch_name ?? selectedBranch?.name}</Text>
+              </View>
+              <View style={styles.ptsPill}><Text style={styles.ptsPillText}>{redeemItem.points_cost} pts</Text></View>
+            </View>
+            {redeemError ? (
+              <View style={{ backgroundColor: '#FEF2F2', borderRadius: 8, padding: 12, marginBottom: 16, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <Feather name="alert-circle" size={16} color={colors.danger} />
+                <Text style={{ fontFamily: fonts.regular, fontSize: 13, color: colors.danger, flex: 1 }}>{redeemError}</Text>
+              </View>
+            ) : null}
+            <Pressable accessibilityRole="button" style={styles.solidBtn} onPress={handleRedeem} disabled={loading}>
+              <Text style={styles.solidBtnText}>{loading ? 'REDEEMING...' : 'REDEEM'}</Text>
             </Pressable>
-          </View>
-        </View>
-      </Modal>
+          </>}
+        </ScrollView>
+      </BottomSheetModal>
     </View>
   );
 }
@@ -615,6 +707,14 @@ const styles = StyleSheet.create({
   title: { fontFamily: fonts.semibold, fontSize: 20, color: colors.label },
   pointsBig: { fontFamily: fonts.semibold, fontSize: 32, color: colors.primary, marginTop: 8 },
   blurb: { fontFamily: fonts.regular, fontSize: 13, color: colors.gray, marginTop: 12, lineHeight: 20 },
+  branchPicker: { marginVertical: 16, gap: 5 },
+  branchLabel: { fontFamily: fonts.semibold, fontSize: 12, color: colors.heading },
+  branchButton: { flexDirection: 'row', gap: 9, alignItems: 'center', minHeight: 48, padding: 10, borderWidth: 1, borderColor: colors.cardBorder, borderRadius: 10 },
+  branchName: { flex: 1, fontFamily: fonts.semibold, fontSize: 14, color: colors.heading },
+  branchOptions: { borderWidth: 1, borderColor: colors.cardBorder, borderRadius: 10, overflow: 'hidden' },
+  branchOption: { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 10, minHeight: 46, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.divider },
+  branchOptionName: { fontFamily: fonts.medium, fontSize: 14, color: colors.heading },
+  branchDetail: { fontFamily: fonts.regular, fontSize: 12, color: colors.grayText },
   sectionRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 20, marginBottom: 8 },
   sectionTitle: { fontFamily: fonts.semibold, fontSize: 20, color: colors.primary },
   link: { fontFamily: fonts.regular, fontSize: 13, color: colors.primary, textDecorationLine: 'underline' },
@@ -773,15 +873,18 @@ const styles = StyleSheet.create({
     color: colors.disabledGray,
   },
 
-  sheetBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.3)' },
-  bottomSheet: { backgroundColor: '#fff', borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingHorizontal: 24, paddingTop: 24, paddingBottom: 40 },
+  bottomSheet: { backgroundColor: '#fff', borderTopLeftRadius: 20, borderTopRightRadius: 20, maxHeight: '90%' },
+  sheetContent: { paddingHorizontal: 24, paddingTop: 24, paddingBottom: 32 },
+  previewFrame: { backgroundColor: '#F3F8FC', borderRadius: 14, alignItems: 'center', padding: 10 },
+  rewardPreview: { width: '100%', height: 128 },
+  claimSummary: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 15 },
+  pickupSummary: { flex: 1, gap: 3 },
   sheetHead: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 12 },
   sheetTitle: { fontFamily: fonts.semibold, fontSize: 20, color: colors.heading, flexShrink: 1 },
   solidBtn: { backgroundColor: colors.primary, borderRadius: radii.card, paddingVertical: 12, alignItems: 'center' },
   solidBtnText: { fontFamily: fonts.semibold, fontSize: 15, color: '#fff' },
 
-  centerBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.3)', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24 },
-  successCard: { width: 320, backgroundColor: '#fff', borderRadius: radii.card, paddingHorizontal: 24, paddingVertical: 32, alignItems: 'center' },
+  successCard: { gap: 12, alignItems: 'stretch' },
   successTitle: { fontFamily: fonts.bold, fontSize: 20, color: colors.primary, marginBottom: 4 },
   successCode: { fontFamily: fonts.semibold, fontSize: 20, color: colors.primary, marginBottom: 12 },
   successNote: { fontFamily: fonts.semibold, fontSize: 10, color: colors.primary, textAlign: 'center' },
