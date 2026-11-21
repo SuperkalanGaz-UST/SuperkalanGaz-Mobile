@@ -13,8 +13,8 @@ import {
   Text,
   useWindowDimensions,
   View,
-  type ScrollView as ScrollViewInstance,
-  type View as ViewInstance,
+  type ScrollViewInstance,
+  type ViewInstance,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -334,7 +334,7 @@ export function HomeScreen({
       if (isScrollTarget) {
         const scroll = scrollRef.current;
         const viewport = scroll?.getNativeScrollRef();
-        const content = scroll?.getInnerViewNode();
+        const content = scroll?.getInnerViewRef();
         if (!scroll || !viewport || !content) {
           nextFrame();
           return;

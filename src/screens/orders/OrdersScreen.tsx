@@ -7,7 +7,7 @@ import {
   StyleSheet,
   Text,
   View,
-  type View as ViewInstance,
+  type ViewInstance,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import * as WebBrowser from 'expo-web-browser';
