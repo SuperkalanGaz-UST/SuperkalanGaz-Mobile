@@ -35,7 +35,9 @@ before(async () => {
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   baseUrl = `http://127.0.0.1:${server.address().port}`;
-  browser = await chromium.launch({ headless: true });
+  browser = process.env.TEST_MOBILE_BROWSER === 'webkit'
+    ? await webkit.launch({ headless: true })
+    : await chromium.launch({ headless: true, channel: process.env.TEST_BROWSER_CHANNEL });
 });
 
 after(async () => {
@@ -195,6 +197,47 @@ test('signup and password recovery have public routes without putting recovery p
   } finally { await context.close(); }
 });
 
+test('Commercial Customer guide dims the bottom navigation and restores the white Home background', { timeout: 15_000 }, async () => {
+  const session = sessionFor('customer');
+  session.user.app_metadata.account_type = 'commercial';
+  const { context, page } = await newContext(session, { viewport: { width: 393, height: 896 }, reducedMotion: 'reduce' });
+  try {
+    await page.goto(`${baseUrl}/customer/home?showGuide=true`);
+    const guide = page.getByTestId('app-guide-card');
+    await guide.getByText('Hi! Welcome to Superkalan Gaz App', { exact: true }).waitFor();
+    const guideScreenshot = await page.screenshot({ scale: 'css' });
+    await guide.getByRole('button', { name: 'Close guide' }).click();
+    await guide.waitFor({ state: 'detached' });
+    await page.getByText('Commercial reward', { exact: true }).waitFor();
+    await page.getByText('Quick order', { exact: true }).waitFor();
+
+    const screenshot = await page.screenshot({ scale: 'css' });
+    const readPixels = async (png, coords) => page.evaluate(async ({ png, coords }) => {
+      const image = new Image();
+      image.src = `data:image/png;base64,${png}`;
+      await image.decode();
+      const canvas = document.createElement('canvas');
+      canvas.width = image.width;
+      canvas.height = image.height;
+      const drawing = canvas.getContext('2d');
+      drawing.drawImage(image, 0, 0);
+      return coords.map(([x, y]) => Array.from(drawing.getImageData(x, y, 1, 1).data).slice(0, 3));
+    }, { png: png.toString('base64'), coords });
+    const pixels = await readPixels(screenshot, [[376, 70], [376, 750], [376, 800]]);
+    const [hero, belowQuickOrder, aboveNavigation] = pixels;
+    assert.ok(hero[2] > hero[0], 'The hero keeps its blue background');
+    assert.deepEqual(belowQuickOrder, [255, 255, 255], 'The area below Quick order is white');
+    assert.deepEqual(aboveNavigation, [255, 255, 255], 'The white background reaches the bottom navigation');
+    const bottomPixels = [[50, 865], [376, 891]];
+    const dimmed = await readPixels(guideScreenshot, bottomPixels);
+    const restored = await readPixels(screenshot, bottomPixels);
+    for (const [index, pixel] of dimmed.entries()) {
+      assert.ok(pixel.every((channel, component) => Math.abs(channel - restored[index][component] * 0.38) <= 3),
+        `Welcome backdrop covers ${bottomPixels[index]} (dimmed ${pixel}, restored ${restored[index]})`);
+    }
+  } finally { await context.close(); }
+});
+
 test('customer guide highlights Active Orders in History without requiring an order', { timeout: 15_000 }, async () => {
   const { context, page, errors } = await newContext(sessionFor('customer'), {
     viewport: { width: 393, height: 695 },
@@ -246,6 +289,16 @@ test('customer guide highlights Active Orders in History without requiring an or
     const navCard = await card.boundingBox();
     assert.ok((await spotlight.boundingBox()).y > navCard.y + navCard.height);
 
+    await next.click();
+    await card.getByText('Need Help?', { exact: true }).waitFor();
+    const helpButton = page.locator('[aria-label="Open app guide"]');
+    await page.waitForFunction(button => {
+      const hole = document.querySelector('[data-testid="app-guide-spotlight"]').getBoundingClientRect();
+      const bounds = button.getBoundingClientRect();
+      return hole.left <= bounds.left && hole.right >= bounds.right && hole.top <= bounds.top && hole.bottom >= bounds.bottom;
+    }, await helpButton.elementHandle());
+    await back.click();
+    await card.getByText('Navigate with Ease!', { exact: true }).waitFor();
     await back.click();
     await card.getByText('Quick Order', { exact: true }).waitFor();
     await back.click();
@@ -612,6 +665,137 @@ test('order links retain the distinction between new requests and milestone trac
   } finally { await context.close(); }
 });
 
+test('tracking back responds near the arrow and returns to the previous Home entry', { timeout: 15_000 }, async () => {
+  const order = {
+    id: '00000000-0000-4000-8000-000000000006', status: 'Pending',
+    cylinder_size: '11kg', quantity: 1, requested_at: '2026-11-20T01:00:00Z',
+    payment_method: 'Cash on Delivery',
+  };
+  const { context, page, requests } = await newContext(sessionFor('customer'), {
+    orders: [order], viewport: { width: 512, height: 1138 }, reducedMotion: 'reduce', device: { hasTouch: true },
+  });
+  try {
+    await page.goto(`${baseUrl}/customer/home`);
+    await page.getByRole('button', { name: 'Close guide', exact: true }).click();
+    const activeOrder = page.getByRole('button', { name: 'View active order status', exact: true });
+    await activeOrder.click();
+    const title = page.getByText('Track my Order', { exact: true });
+    const header = title.locator('..');
+    await header.tap({ position: { x: 57, y: 7 } });
+    await activeOrder.waitFor({ timeout: 3_000 });
+    await expectPath(page, '/customer/home');
+
+    await page.goForward();
+    await title.waitFor({ timeout: 3_000 });
+    await page.getByRole('button', { name: 'Go back', exact: true }).click();
+    await activeOrder.waitFor({ timeout: 3_000 });
+    assert.equal(requests.some(request => request.method !== 'GET'), false);
+
+    await page.goto(`${baseUrl}/customer/order/${order.id}`);
+    await title.waitFor();
+    await page.getByRole('button', { name: 'Go back', exact: true }).click();
+    await expectPath(page, '/customer/home');
+    await activeOrder.waitFor({ timeout: 3_000 });
+  } finally { await context.close(); }
+});
+
+test('closing tracking after checkout returns to Home after placing just one order', { timeout: 15_000 }, async () => {
+  const orders = [];
+  const { context, page, requests } = await newContext(sessionFor('customer'), { orders, reducedMotion: 'reduce' });
+  page.setDefaultTimeout(4_000);
+  try {
+    await context.route('**/api/branches/public', route => route.fulfill({ json: { branches: [
+      { id: 'test-branch', name: 'Test branch', address: 'Test address', city: null, province: null },
+    ] } }));
+    await context.route('**/api/prices/for-branch/test-branch', route => route.fulfill({ json: {
+      prices: ['50kg', '22kg', '11kg', '5kg', '2.7kg'].map(cylinder_size => ({ cylinder_size, unit_price: 1200, available_qty: 4 })),
+    } }));
+    let submissions = 0;
+    await context.route('**/api/service-requests/customer', route => {
+      assert.equal(route.request().method(), 'POST');
+      submissions++;
+      const order = {
+        id: '00000000-0000-4000-8000-000000000006', status: 'Pending',
+        cylinder_size: '11kg', quantity: 1, requested_at: '2026-11-20T01:00:00Z', payment_method: 'Cash on Delivery',
+      };
+      orders.push(order);
+      return route.fulfill({ status: 201, json: { serviceRequest: order } });
+    });
+    await page.goto(`${baseUrl}/customer/order`);
+    await page.getByText('Choose cylinders', { exact: true }).click();
+    await page.getByRole('button', { name: 'Select 11 KG cylinder' }).click();
+    await page.getByText('Review order', { exact: true }).click();
+    await page.getByText('Deliver now', { exact: true }).click();
+    await page.getByRole('button', { name: 'REVIEW ORDER', exact: true }).click();
+    await page.getByRole('button', { name: 'PLACE ORDER', exact: true }).click();
+    await page.getByText('SEE ORDER RECEIPT', { exact: true }).click();
+    await page.getByText('Track my Order', { exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Go back', exact: true }).click();
+    await expectPath(page, '/customer/home');
+    await page.getByRole('button', { name: 'View active order status', exact: true }).waitFor();
+    assert.equal(submissions, 1);
+    assert.equal(requests.some(request => request.method !== 'GET'), false, 'Leaving tracking makes no writes');
+  } finally { await context.close(); }
+});
+
+test('customer tracking stays Preparing after rider acceptance and advances only when transit starts', { timeout: 30_000 }, async () => {
+  const order = {
+    id: '00000000-0000-4000-8000-000000000006', status: 'Pending',
+    cylinder_size: '11kg', quantity: 1, requested_at: '2026-11-20T01:00:00Z',
+    created_at: '2026-11-20T01:00:00Z', dispatched_at: null, in_transit_at: null, delivered_at: null,
+    payment_method: 'Cash on Delivery', payment_status: 'Pending', rider_id: null,
+    items: ['2.7kg', '5kg', '11kg', '22kg', '50kg'].map(cylinder_size => ({ cylinder_size, quantity: 1 })),
+  };
+  const { context, page, requests, errors } = await newContext(sessionFor('customer'), { orders: [order], reducedMotion: 'reduce' });
+  page.setDefaultTimeout(8_000);
+  let phase = 'pending order';
+  try {
+    await page.goto(`${baseUrl}/customer/order/${order.id}`);
+    await page.getByText('Track my Order', { exact: true }).waitFor();
+    const transit = page.getByText('Out for Delivery', { exact: true });
+    assert.equal(await transit.evaluate(el => getComputedStyle(el).color), 'rgb(138, 143, 153)');
+    assert.equal(await page.getByText('Order Confirmed', { exact: true }).evaluate(el => getComputedStyle(el).color), 'rgb(20, 50, 99)');
+
+    // Accepting the offer assigns a rider and stamps dispatch, without starting transit.
+    phase = 'accepted order';
+    Object.assign(order, { status: 'Dispatched', dispatched_at: '2026-11-20T01:05:00Z', rider_id: 'rider-1' });
+    await page.waitForFunction(() => [...document.querySelectorAll('*')].some(el =>
+      el.textContent === 'Preparing' && getComputedStyle(el).color === 'rgb(20, 50, 99)'));
+    assert.equal(await transit.evaluate(el => getComputedStyle(el).color), 'rgb(138, 143, 153)');
+    assert.equal(await page.getByText('Your rider is on the way with your order!', { exact: true }).count(), 0);
+    await page.reload();
+    await page.getByText('Preparing', { exact: true }).waitFor();
+    assert.equal(await transit.evaluate(el => getComputedStyle(el).color), 'rgb(138, 143, 153)');
+
+    await page.goto(`${baseUrl}/customer/home`);
+    phase = 'home card';
+    const card = page.getByRole('button', { name: 'View active order status', exact: true });
+    await card.getByText('Preparing', { exact: true }).waitFor();
+    await card.getByText('5 cylinders', { exact: true }).waitFor();
+    await card.getByText('1 × 2.7 kg', { exact: true }).waitFor();
+    await card.getByText('1 × 50 kg', { exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Close guide', exact: true }).click();
+    await page.getByTestId('app-guide-card').waitFor({ state: 'hidden' });
+    await card.click();
+    await page.getByText('Track my Order', { exact: true }).waitFor();
+
+    // The rider's start action is the only transition to the travelling milestone.
+    phase = 'started transit';
+    Object.assign(order, { status: 'En Route', in_transit_at: '2026-11-20T01:10:00Z' });
+    await page.getByText('Your rider is on the way with your order!', { exact: true }).waitFor();
+    assert.equal(await transit.evaluate(el => getComputedStyle(el).color), 'rgb(20, 50, 99)');
+    await page.getByText('Your rider has started the trip and is heading your way.', { exact: true }).waitFor();
+
+    Object.assign(order, { status: 'Delivered', delivered_at: '2026-11-20T01:25:00Z' });
+    phase = 'delivered order';
+    await page.getByText('Delivery Complete!', { exact: true }).waitFor();
+    assert.equal(requests.some(request => request.method !== 'GET'), false, 'Tracking must not create or advance delivery milestones');
+    assert.deepEqual(errors, []);
+  } catch (error) {
+    throw new Error(`${phase}: ${page.url()}\n${(await page.locator('body').innerText()).slice(0, 1500)}`, { cause: error });
+  } finally { await context.close(); }
+});
+
 test('the customer can choose a delivery pin in the browser', { timeout: 15_000 }, async () => {
   const { context, page } = await newContext(sessionFor('customer'), { viewport: { width: 320, height: 568 } });
   try {
@@ -688,6 +872,135 @@ test('a Delivery Rider goes Available and accepts an offer without a motorcycle'
   } finally { await context.close(); }
 });
 
+async function recordSheetFrames(page, id) {
+  await page.evaluate(id => {
+    window.sheetFrames = [];
+    function record() {
+      const backdrop = document.querySelector(`[data-testid="${id}-backdrop"]`);
+      const panel = document.querySelector(`[data-testid="${id}-panel"]`);
+      if (backdrop && panel) {
+        const { top, height } = backdrop.getBoundingClientRect();
+        window.sheetFrames.push({ top, height, opacity: Number(getComputedStyle(backdrop).opacity), panelTop: panel.getBoundingClientRect().top });
+      }
+      requestAnimationFrame(record);
+    }
+    requestAnimationFrame(record);
+  }, id);
+}
+
+async function assertSheetOpened(page) {
+  await page.waitForFunction(() => window.sheetFrames.some(frame => frame.opacity === 1), null, { timeout: 3_000 });
+  const frames = await page.evaluate(() => window.sheetFrames);
+  assert.ok(frames.some(frame => frame.opacity > 0 && frame.opacity < 1 && frame.panelTop > frames.at(-1).panelTop), 'Panel opens while backdrop fades');
+}
+
+async function assertSheetClosed(page, viewportHeight) {
+  const frames = await page.evaluate(() => window.sheetFrames);
+  const fullyOpen = frames.findIndex(frame => frame.opacity === 1);
+  assert.ok(frames.slice(fullyOpen + 1).some(frame => frame.opacity > 0 && frame.opacity < 1 && frame.panelTop > frames[fullyOpen].panelTop), 'Panel closes while backdrop fades');
+  assert.ok(frames.every(frame => frame.top === 0 && frame.height === viewportHeight), 'Backdrop never moves');
+}
+
+test('delivery feedback slides over a stationary fading backdrop', { timeout: 15_000 }, async () => {
+  const { context, page } = await newContext(sessionFor('customer'), { viewport: { width: 375, height: 625 }, orders: [{
+    id: '00000000-0000-4000-8000-000000000011', sr_code: 'SR-RATING', status: 'Delivered',
+    requested_at: new Date().toISOString(), delivered_at: new Date().toISOString(),
+    cylinder_size: '11kg', quantity: 1, total_amount: 1200,
+  }] });
+  try {
+    await page.goto(`${baseUrl}/customer/orders`);
+    await page.getByText('Past Orders (1)', { exact: true }).click();
+    await recordSheetFrames(page, 'feedback-sheet');
+    await page.getByText('Rate this order', { exact: true }).click({ timeout: 3_000 });
+    await page.getByText('How was your experience?', { exact: true }).waitFor();
+    const backdrop = page.getByTestId('feedback-sheet-backdrop');
+    assert.equal(await backdrop.count(), 1, 'The rating panel must use a separate stationary backdrop');
+    await assertSheetOpened(page);
+    await page.getByRole('button', { name: 'Close feedback' }).click();
+    await backdrop.waitFor({ state: 'detached' });
+    await assertSheetClosed(page, 625);
+  } finally { await context.close(); }
+});
+
+test('Household Customers choose the pickup branch and preview the reward before redeeming', { timeout: 15_000 }, async () => {
+  const { context, page } = await newContext(sessionFor('customer'), { viewport: { width: 375, height: 625 } });
+  try {
+    await context.route(url => url.pathname === '/api/loyalty/catalog', route => {
+      assert.equal(new URL(route.request().url()).searchParams.get('byPickupBranch'), 'true');
+      return route.fulfill({ json: {
+        pickup_branches: [{ id: 'first', name: 'First branch' }, { id: 'chosen', name: 'Chosen branch' }],
+        catalogItems: [
+          { id: 'notebook-first', franchise_reward_id: 'notebook', branch_id: 'first', branch_name: 'First branch', name: 'Notebook and Pen', points_cost: 10, stock_qty: 0 },
+          { id: 'notebook-chosen', franchise_reward_id: 'notebook', branch_id: 'chosen', branch_name: 'Chosen branch', name: 'Notebook and Pen', points_cost: 10, stock_qty: 3 },
+        ],
+      } });
+    });
+    await context.route('**/api/loyalty/me', route => route.fulfill({ json: { points_balance: 10 } }));
+    let writes = 0;
+    await context.route('**/api/loyalty/me/redemptions', route => {
+      const payload = route.request().postDataJSON();
+      assert.equal(payload.branchId, 'chosen');
+      assert.equal(payload.catalogItemId, 'notebook-chosen');
+      writes++;
+      return route.fulfill({ status: 201, json: { redemption: { id: 'redemption', branch_id: 'chosen', branch_name: 'Chosen branch', catalog_item_name: 'Notebook and Pen', status: 'approved', redemption_code: 'ABC-123' } } });
+    });
+    await page.goto(`${baseUrl}/customer/rewards`);
+    const picker = page.getByRole('button', { name: 'Choose a pickup branch', exact: true });
+    await picker.click();
+    await page.getByRole('radio', { name: 'First branch', exact: true }).click();
+    await page.getByText('Out of stock', { exact: false }).waitFor();
+    await page.getByRole('button', { name: 'Pickup branch: First branch' }).click();
+    await page.getByRole('radio', { name: 'Chosen branch', exact: true }).click();
+    await recordSheetFrames(page, 'reward-sheet');
+    await page.getByText('Notebook and Pen', { exact: true }).click();
+    await assertSheetOpened(page);
+    const panel = page.getByTestId('reward-sheet-panel');
+    await panel.getByTestId('reward-preview').locator('img').waitFor();
+    await panel.getByText('Chosen branch', { exact: true }).waitFor();
+    await panel.getByRole('button', { name: 'Close reward' }).click();
+    await page.getByTestId('reward-sheet-backdrop').waitFor({ state: 'detached' });
+    await assertSheetClosed(page, 625);
+    await page.getByText('Notebook and Pen', { exact: true }).click();
+    await panel.getByRole('button', { name: 'REDEEM', exact: true }).click();
+    await panel.getByText('ABC-123', { exact: true }).waitFor();
+    assert.equal(writes, 1);
+  } finally { await context.close(); }
+});
+
+test('Commercial Customers pick the branch with the cycle they want to redeem', { timeout: 15_000 }, async () => {
+  const session = sessionFor('customer');
+  session.user.app_metadata.account_type = 'commercial';
+  const { context, page } = await newContext(session);
+  try {
+    let issued = false;
+    await context.route('**/api/loyalty/me', route => route.fulfill({ json: {
+      commercial_accounts: [
+        { branch_id: 'first', branch_name: 'First branch', completed_cycles: 0, current_cycle_count: 19 },
+        { branch_id: 'chosen', branch_name: 'Chosen branch', completed_cycles: issued ? 0 : 1, current_cycle_count: 4 },
+      ],
+      commercial_purchases: [{ id: 'first-order', branch_id: 'first', counted_at: '2026-11-19' }],
+      active_redemptions: issued ? [{ id: 'redemption', branch_id: 'chosen', branch_name: 'Chosen branch', status: 'approved', redemption_code: 'CBA-321' }] : [],
+    } }));
+    await context.route('**/api/loyalty/me/commercial-redemptions', route => {
+      assert.deepEqual(route.request().postDataJSON(), { branchId: 'chosen' });
+      issued = true;
+      return route.fulfill({ status: 201, json: {} });
+    });
+    await page.goto(`${baseUrl}/customer/rewards`);
+    await page.getByRole('button', { name: 'Choose a pickup branch' }).click();
+    await page.getByRole('radio', { name: /First branch, 19 of 30/ }).click();
+    await page.getByRole('progressbar', { name: '19 of 30 qualifying purchases' }).waitFor();
+    await page.getByText('Qualifying purchase', { exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Pickup branch: First branch' }).click();
+    await page.getByRole('radio', { name: /Chosen branch, 1 free cylinder available/ }).click();
+    await page.getByRole('progressbar', { name: '4 of 30 qualifying purchases' }).waitFor();
+    await page.getByText('No counted purchases yet.', { exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Request free cylinder' }).click();
+    await page.getByText('CBA-321', { exact: true }).waitFor();
+    assert.equal(issued, true);
+  } finally { await context.close(); }
+});
+
 test('payment sheet slides over a stationary fading backdrop', { timeout: 15_000 }, async () => {
   const { context, page } = await newContext(sessionFor('customer'), { viewport: { width: 375, height: 625 } });
   try {
@@ -695,11 +1008,15 @@ test('payment sheet slides over a stationary fading backdrop', { timeout: 15_000
       { id: 'test-branch', name: 'Test branch', address: 'Test address', city: null, province: null },
     ] } }));
     await context.route('**/api/prices/for-branch/test-branch', route => route.fulfill({ json: {
-      prices: ['50kg', '22kg', '11kg', '5kg', '2.7kg'].map(cylinder_size => ({ cylinder_size, unit_price: 1200 })),
+      prices: ['50kg', '22kg', '11kg', '5kg', '2.7kg'].map(cylinder_size => ({
+        cylinder_size, unit_price: 1200, available_qty: cylinder_size === '11kg' ? 1 : 0,
+      })),
     } }));
     await page.goto(`${baseUrl}/customer/order`);
     await page.getByText('Choose cylinders', { exact: true }).click();
+    assert.equal(await page.getByRole('button', { name: '5 KG cylinder, out of stock', exact: true }).isDisabled(), true);
     await page.getByRole('button', { name: 'Select 11 KG cylinder' }).click();
+    assert.equal(await page.getByRole('button', { name: 'Add one 11 KG cylinder', exact: true }).isDisabled(), true);
     await page.getByText('Review order', { exact: true }).click();
     await page.getByText('Deliver now', { exact: true }).click();
     await page.getByRole('button', { name: 'REVIEW ORDER', exact: true }).click();
@@ -736,6 +1053,47 @@ test('payment sheet slides over a stationary fading backdrop', { timeout: 15_000
     assert.equal(await page.getByText('Online payment — GCash, Maya, or QR Ph', { exact: true }).count(), 0);
   } finally { await context.close(); }
 });
+
+test('checkout refreshes stock after another order takes the last cylinder', { timeout: 15_000 }, async () => {
+  const { context, page } = await newContext(sessionFor('customer'));
+  try {
+    page.setDefaultTimeout(4_000);
+    let available = 1;
+    await context.route('**/api/branches/public', route => route.fulfill({ json: { branches: [
+      { id: 'test-branch', name: 'Test branch', address: 'Test address', city: null, province: null },
+    ] } }));
+    await context.route('**/api/prices/for-branch/test-branch', route => route.fulfill({ json: {
+      prices: ['50kg', '22kg', '11kg', '5kg', '2.7kg'].map(cylinder_size => ({
+        cylinder_size, unit_price: 1200, available_qty: cylinder_size === '11kg' ? available : 0,
+      })),
+    } }));
+    await context.route('**/api/service-requests/customer', route => {
+      assert.deepEqual(route.request().postDataJSON().items, [{ cylinderSize: '11kg', quantity: 1 }]);
+      available = 0;
+      return route.fulfill({ status: 409, json: { message: 'There is not enough 11kg cylinder stock at this branch.' } });
+    });
+    await page.goto(`${baseUrl}/customer/order`);
+    await page.getByText('Choose cylinders', { exact: true }).click();
+    await page.getByRole('button', { name: 'Select 11 KG cylinder' }).click();
+    const review = page.getByText('Review order', { exact: true });
+    await review.click();
+    await page.getByText('Deliver now', { exact: true }).click();
+    await page.getByRole('button', { name: 'REVIEW ORDER', exact: true }).click();
+    await page.getByRole('button', { name: 'PLACE ORDER', exact: true }).click();
+    await page.getByText('This branch is out of cylinder stock.', { exact: true }).waitFor();
+    assert.equal(await page.getByRole('button', { name: 'Add one 11 KG cylinder' }).isDisabled(), true);
+    await review.click({ force: true });
+    assert.equal(await page.getByText('Build your order', { exact: true }).isVisible(), true);
+    await page.getByRole('button', { name: 'Remove one 11 KG cylinder' }).click();
+    const soldOutCylinder = page.getByRole('button', { name: '11 KG cylinder, out of stock', exact: true });
+    assert.equal(await soldOutCylinder.isVisible(), true);
+    assert.equal(await soldOutCylinder.isDisabled(), true);
+    available = 1;
+    await page.getByRole('button', { name: /Refresh stock/ }).click();
+    assert.equal(await page.getByRole('button', { name: 'Select 11 KG cylinder' }).isEnabled(), true);
+  } finally { await context.close(); }
+});
+
 
 test('the customer guide fits a narrow Safari viewport and highlights the live controls', { timeout: 20_000 }, async () => {
   const safari = await webkit.launch();

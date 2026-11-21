@@ -32,6 +32,13 @@ function CustomerScreen({ navigation, route, firstGuide, dismissGuide }: NativeS
     ] });
   }, [navigation, route.key, dismissGuide]);
 
+  const closeTracking = useCallback(() => {
+    dismissGuide();
+    // Stay within the customer stack when a link opens tracking directly.
+    if (navigation.getState().index > 0) navigation.goBack();
+    else navigation.replace('home', { tab: 'home' });
+  }, [navigation, dismissGuide]);
+
   switch (route.name) {
     case 'home':
     case 'rewards':
@@ -44,7 +51,7 @@ function CustomerScreen({ navigation, route, firstGuide, dismissGuide }: NativeS
     case 'orders': return <OrdersScreen onNavigate={navigate} />;
     case 'more': return <MoreScreen onNavigate={navigate} />;
     case 'profile': return <ProfileScreen initialSection={route.params?.profileSection ?? 'personal'} onNavigate={navigate} />;
-    case 'order-process': return <OrderProcessScreen initialOrderId={route.params?.orderId} onOrderPlaced={orderPlaced} onNavigate={navigate} />;
+    case 'order-process': return <OrderProcessScreen initialOrderId={route.params?.orderId} onOrderPlaced={orderPlaced} onCloseTracking={closeTracking} onNavigate={navigate} />;
     case 'faqs': return <FaqScreen onNavigate={navigate} />;
   }
 }

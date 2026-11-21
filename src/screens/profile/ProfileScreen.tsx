@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Image, Modal, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
+import { Image, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { useAuth } from '@/contexts/AuthContext';
 import { colors } from '@/theme/colors';
@@ -9,6 +9,7 @@ import { AppHeader } from '@/components/ui/AppHeader';
 import { AppRefreshControl } from '@/components/ui/AppRefreshControl';
 import { BottomNav } from '@/components/ui/BottomNav';
 import { PhoneField } from '@/components/ui/controls';
+import { BottomSheetModal } from '@/components/ui/overlays';
 import { usePullToRefresh } from '@/hooks/usePullToRefresh';
 import { normalizePhMobile } from '@/lib/phMobile';
 import type { MainNavigateOptions, MainScreen, ProfileSection } from '@/navigation/types';
@@ -254,9 +255,7 @@ export function ProfileScreen({
       </ScrollView>
 
       {/* Reset password sheet */}
-      <Modal visible={resetOpen} transparent animationType="slide" onRequestClose={() => setResetOpen(false)}>
-        <Pressable style={styles.sheetBackdrop} onPress={() => setResetOpen(false)} />
-        <View style={styles.resetSheet}>
+      <BottomSheetModal visible={resetOpen} onClose={() => setResetOpen(false)} testID="password-reset-sheet" style={styles.resetSheet}>
           <View style={styles.resetHead}>
             <Text style={styles.resetTitle}>Password reset</Text>
             <Pressable onPress={() => setResetOpen(false)} hitSlop={8}>
@@ -285,8 +284,7 @@ export function ProfileScreen({
               <Text style={[styles.resetBtnText, { color: '#fff' }]}>CONFIRM</Text>
             </Pressable>
           </View>
-        </View>
-      </Modal>
+      </BottomSheetModal>
 
       <BottomNav active="more" onNavigate={onNavigate} />
     </View>
@@ -330,7 +328,6 @@ const styles = StyleSheet.create({
   prefRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: colors.prefRowBg, borderRadius: 12, paddingHorizontal: 12, height: 48, marginBottom: 8 },
   prefLabel: { fontFamily: fonts.semibold, fontSize: 12, color: '#000' },
 
-  sheetBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.3)' },
   resetSheet: { backgroundColor: '#fff', borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingHorizontal: 24, paddingTop: 24, paddingBottom: 32 },
   resetHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 },
   resetTitle: { fontFamily: fonts.semibold, fontSize: 20, color: colors.heading },

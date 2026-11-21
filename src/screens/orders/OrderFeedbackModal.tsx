@@ -2,13 +2,14 @@ import { useEffect, useRef, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import {
-  Keyboard, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView,
+  Keyboard, KeyboardAvoidingView, Platform, Pressable, ScrollView,
   StyleSheet, Text, TextInput, View,
 } from 'react-native';
 import { apiErrorMessage, apiFetch } from '@/lib/api';
 import { colors } from '@/theme/colors';
 import { fonts } from '@/theme/fonts';
 import { radii } from '@/theme/metrics';
+import { BottomSheetModal } from '@/components/ui/overlays';
 
 const reviewedKey = (customerId: string) => `superkalan.reviewedOrders.${customerId}`;
 
@@ -100,13 +101,14 @@ export function OrderFeedbackModal({
   };
 
   return (
-    <Modal visible={orderId !== null} transparent animationType="slide" onRequestClose={close}>
-      <View style={{ flex: 1, justifyContent: 'flex-end' }}>
-        <Pressable style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.3)' }]} onPress={close} />
+    <BottomSheetModal visible={orderId !== null} onClose={close} testID="feedback-sheet" style={styles.feedbackPanel}>
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
           <View style={styles.feedbackSheet}>
             <View style={styles.progressRow}>
               {step === 'comment' ? <><View style={styles.dot} /><View style={styles.dash} /></> : <><View style={styles.dash} /><View style={styles.dot} /></>}
+              <Pressable accessibilityRole="button" accessibilityLabel="Close feedback" onPress={close} style={styles.closeButton} hitSlop={8}>
+                <Feather name="x" size={20} color={colors.grayText} />
+              </Pressable>
             </View>
             <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
               {step === 'rate' && <View style={styles.fbAvatarWrap}><View style={styles.fbAvatar}><Feather name="user" size={42} color="#fff" /></View></View>}
@@ -141,12 +143,13 @@ export function OrderFeedbackModal({
             </ScrollView>
           </View>
         </KeyboardAvoidingView>
-      </View>
-    </Modal>
+    </BottomSheetModal>
   );
 }
 
 const styles = StyleSheet.create({
+  feedbackPanel: { maxHeight: '92%' },
+  closeButton: { marginLeft: 'auto' },
   feedbackSheet: { backgroundColor: '#fff', borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingHorizontal: 20, paddingTop: 20, paddingBottom: 32 },
   progressRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 16 },
   dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.muted },

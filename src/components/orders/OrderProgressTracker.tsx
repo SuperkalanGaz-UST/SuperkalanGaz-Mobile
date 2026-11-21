@@ -39,7 +39,7 @@ export function OrderProgressTracker({ status, variant = 'home', active = true }
 }) {
   const milestone = orderProgress(status);
   const labels = variant === 'home' ? HOME_LABELS : STATUS_LABELS;
-  const current = variant === 'home' ? milestone.step : [0, 2, 3][milestone.step];
+  const current = variant === 'home' ? [0, 0, 1, 2][milestone.step] : milestone.step;
   const target = current / (labels.length - 1);
   const fill = useRef(new Animated.Value(target)).current;
   const sweep = useRef(new Animated.Value(0)).current;

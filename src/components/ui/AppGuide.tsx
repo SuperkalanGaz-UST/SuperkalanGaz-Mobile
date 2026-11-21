@@ -1,15 +1,16 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ComponentRef } from 'react';
 import {
   Animated,
+  BackHandler,
   Easing,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
   useWindowDimensions,
   View,
-  type ViewInstance,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -39,6 +40,7 @@ const GAP = 16;
 export const GUIDE_TRANSITION_DURATION = 310;
 const CONTENT_TRANSITION_DURATION = 180;
 const AnimatedRect = Animated.createAnimatedComponent(Rect);
+const guideInScreen = Platform.OS === 'android';
 
 export function AppGuideOverlay({ visible, step, rect, pageReady, reduceMotion, onNext, onBack, onClose }: {
   visible: boolean;
@@ -53,9 +55,12 @@ export function AppGuideOverlay({ visible, step, rect, pageReady, reduceMotion, 
   const window = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const visibleViewport = useVisibleViewport(visible);
-  const overlayRef = useRef<ViewInstance>(null);
+  const overlayRef = useRef<ComponentRef<typeof View>>(null);
   const [viewport, setViewport] = useState<GuideRect | null>(null);
   const [cardHeight, setCardHeight] = useState(190);
+  const [retained, setRetained] = useState(visible);
+  const [overlayOpacity] = useState(() => new Animated.Value(0));
+  if (guideInScreen && visible && !retained) setRetained(true);
   const [content, setContent] = useState<{ step: number; visible: boolean; previous: number | null }>({ step, visible, previous: null });
   const [contentProgress] = useState(() => new Animated.Value(1));
   const revealNewPage = useRef(false);
@@ -70,8 +75,11 @@ export function AppGuideOverlay({ visible, step, rect, pageReady, reduceMotion, 
   const previous = visible && !reduceMotion && content.previous !== null ? GUIDE_STEPS[content.previous] : null;
   const outgoingOpacity = contentProgress.interpolate({ inputRange: [0, 1], outputRange: [1, 0] });
   const windowBounds = { width: window.width, height: window.height, x: 0, y: 0 };
-  const { width, height, x, y } = viewport ?? windowBounds;
-  const boundary = visibleViewport ?? windowBounds;
+  const overlayBounds = viewport ?? windowBounds;
+  const { width, height, x, y } = overlayBounds;
+  // The Android overlay fills Home. Its measured origin can already include
+  // a system-bar offset, so apply the safe-area insets in that same frame.
+  const boundary = guideInScreen ? overlayBounds : visibleViewport ?? windowBounds;
   const safeTop = Math.max(0, boundary.y + insets.top - y);
   const safeBottom = Math.min(height, boundary.y + boundary.height - insets.bottom - y);
   const leftInset = Math.max(0, boundary.x + insets.left - x);
@@ -104,6 +112,29 @@ export function AppGuideOverlay({ visible, step, rect, pageReady, reduceMotion, 
   const copyHeight = Math.min(112, Math.max(20, safeHeight - mascotRise - 150));
   const mascotStyle = { top: -mascotRise, width: mascotHeight, height: mascotHeight };
   const duration = visible && !reduceMotion ? GUIDE_TRANSITION_DURATION : 0;
+
+  useEffect(() => {
+    if (!guideInScreen || !retained) return;
+    const animation = Animated.timing(overlayOpacity, {
+      toValue: visible ? 1 : 0,
+      duration: reduceMotion ? 0 : CONTENT_TRANSITION_DURATION,
+      useNativeDriver: true,
+      isInteraction: false,
+    });
+    animation.start(({ finished }) => {
+      if (finished && !visible) setRetained(false);
+    });
+    return () => animation.stop();
+  }, [overlayOpacity, reduceMotion, retained, visible]);
+
+  useEffect(() => {
+    if (!guideInScreen || !visible) return;
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      onClose();
+      return true;
+    });
+    return () => subscription.remove();
+  }, [onClose, visible]);
 
   useLayoutEffect(() => {
     if (!previous) {
@@ -166,8 +197,7 @@ export function AppGuideOverlay({ visible, step, rect, pageReady, reduceMotion, 
     return () => animation.stop();
   }, [duration, hasHole, height, holeHeight, holeTop, holeWidth, left, pageReady, spotlight, width]);
 
-  return (
-    <Modal visible={visible} transparent statusBarTranslucent navigationBarTranslucent animationType={reduceMotion ? 'none' : 'fade'} onRequestClose={onClose}>
+  const overlay = (
       <View ref={overlayRef} style={styles.root} onLayout={() => {
         overlayRef.current?.measureInWindow((x, y, width, height) => {
           if (width > 0 && height > 0) setViewport({ x, y, width, height });
@@ -236,12 +266,33 @@ export function AppGuideOverlay({ visible, step, rect, pageReady, reduceMotion, 
           </View>
         </Animated.View>
       </View>
+  );
+
+  if (guideInScreen) {
+    if (!retained) return null;
+    // Android dialogs have their own system-bar bounds. Use Home's edges so the
+    // backdrop and spotlight cover the same surface as the bottom tabs.
+    return (
+      <Animated.View
+        style={[styles.screenOverlay, { opacity: overlayOpacity }]}
+        pointerEvents={visible ? 'auto' : 'none'}
+        importantForAccessibility={visible ? 'auto' : 'no-hide-descendants'}
+      >
+        {overlay}
+      </Animated.View>
+    );
+  }
+
+  return (
+    <Modal visible={visible} transparent animationType={reduceMotion ? 'none' : 'fade'} onRequestClose={onClose}>
+      {overlay}
     </Modal>
   );
 }
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
+  screenOverlay: { ...StyleSheet.absoluteFill, zIndex: 1 },
   cardWrap: { position: 'absolute' },
   mascot: { position: 'absolute', alignSelf: 'center', zIndex: 1 },
   mascotImage: { width: '100%', height: '100%' },

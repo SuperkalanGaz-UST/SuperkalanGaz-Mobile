@@ -1,5 +1,5 @@
-import { type Ref, useState } from 'react';
-import { Image, Modal, Pressable, StyleSheet, Text, View, type StyleProp, type ViewInstance, type ViewStyle } from 'react-native';
+import { type ComponentRef, type Ref, useState } from 'react';
+import { Image, Modal, Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@/contexts/AuthContext';
@@ -123,7 +123,7 @@ export function AppHeader({
   onHelp?: () => void;
   onProfile?: () => void;
   /** Ref on the help (?) icon, so the app guide can spotlight it. */
-  helpRef?: Ref<ViewInstance>;
+  helpRef?: Ref<ComponentRef<typeof View>>;
   style?: StyleProp<ViewStyle>;
   variant?: 'default' | 'home';
 }) {
