@@ -178,6 +178,7 @@ existing `superkalan://` scheme for the same paths.
 | Experience | Paths |
 |---|---|
 | Signed out | `/login`, `/signup`, `/forgot-password` |
+| Capstone signup demo | `/demo/signup` (signed out, fictional details only) |
 | Customer | `/customer/home`, `/customer/rewards`, `/customer/orders`, `/customer/more`, `/customer/profile`, `/customer/faqs` |
 | Customer order | `/customer/order` for a new request; `/customer/order/<order UUID>` for existing milestone tracking |
 | Delivery Rider | `/delivery-rider/home`, `/delivery-rider/delivery`, `/delivery-rider/profile` |
@@ -188,6 +189,10 @@ For example, `superkalan://customer/orders` opens purchase history in an install
 build. In Expo Go, use its current development URL followed by
 `/--/customer/orders`. HTTPS Universal Links/App Links are not configured by this
 change. See [Expo app-link guidance](https://docs.expo.dev/linking/into-your-app/).
+
+Open `/demo/signup` in a signed-out browser to demonstrate the mock privacy
+notice. **I understand** reveals fixed sample details, and **Finish demo**
+shows a local confirmation. The demo sends no registration requests.
 
 Signed-out protected links show login and resume the destination after a matching
 role signs in. Another persona's screen cannot override the authenticated role.

@@ -29,6 +29,7 @@ export const mobileLinking: LinkingOptions<RootStack> = {
         screens: {
           login: { path: 'login', alias: [''] },
           signup: 'signup',
+          'signup-demo': 'demo/signup',
           forgot: 'forgot-password',
         },
       },

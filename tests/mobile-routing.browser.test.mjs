@@ -177,6 +177,7 @@ test('signup and password recovery have public routes without putting recovery p
     await expectPath(page, '/signup');
     await page.goBack();
     await page.getByText('Welcome back!', { exact: true }).waitFor();
+    requests.length = 0;
     await page.getByText('Forgot password?', { exact: true }).click();
     await expectPath(page, '/forgot-password');
     await page.getByPlaceholder('Email Address', { exact: true }).fill('routes@example.invalid');
@@ -193,6 +194,92 @@ test('signup and password recovery have public routes without putting recovery p
     await page.reload();
     await page.getByPlaceholder('Email Address', { exact: true }).waitFor();
     assert.equal(requests.length, 0, 'Reloading an unfinished recovery must remain signed out');
+    assert.deepEqual(errors, []);
+  } finally { await context.close(); }
+});
+
+test('normal signup shows a local privacy notice and continues to email verification', { timeout: 20_000 }, async () => {
+  const { context, page, requests } = await newContext(sessionFor('customer'), {
+    signedOut: true, viewport: { width: 320, height: 380 },
+  });
+  const registrations = [];
+  try {
+    await context.route('**/api/auth/register', route => {
+      assert.equal(route.request().method(), 'POST');
+      registrations.push(route.request().postDataJSON());
+      return route.fulfill({ json: { needsConfirmation: true } });
+    });
+    await page.goto(baseUrl);
+    await page.getByText('Sign Up', { exact: true }).click();
+    await expectPath(page, '/signup');
+    const dialog = page.getByRole('dialog', { name: 'Registration privacy notice' });
+    await dialog.getByText('Temporary notice', { exact: true }).waitFor();
+    assert.equal(await page.getByPlaceholder('First name').count(), 0);
+
+    const understand = dialog.getByRole('button', { name: 'I understand' });
+    const footer = await understand.boundingBox();
+    assert.ok(footer && footer.y + footer.height <= 380);
+    const noticeScroll = await dialog.getByTestId('signup-privacy-notice-body').evaluate(element => {
+      element.scrollTop = element.scrollHeight;
+      return element.scrollTop;
+    });
+    assert.ok(noticeScroll > 0, 'The privacy notice body should scroll on short screens');
+    assert.equal((await understand.boundingBox()).y, footer.y);
+
+    await dialog.getByRole('button', { name: 'Back', exact: true }).click();
+    await expectPath(page, '/login');
+    assert.equal(registrations.length, 0);
+    await page.getByText('Sign Up', { exact: true }).click();
+    await dialog.getByRole('button', { name: 'I understand' }).click();
+    await dialog.waitFor({ state: 'hidden' });
+    await page.getByPlaceholder('First name').fill('Ana');
+    await page.getByRole('button', { name: 'View privacy notice' }).click();
+    await dialog.getByRole('button', { name: 'Done', exact: true }).click();
+    await dialog.waitFor({ state: 'hidden' });
+    assert.equal(await page.getByPlaceholder('First name').inputValue(), 'Ana');
+    await page.getByPlaceholder('Last name').fill('Santos');
+    await page.getByPlaceholder('name@example.com').fill('signup-test@example.invalid');
+    await page.getByPlaceholder('Street, barangay, city').fill('Test address');
+    await page.getByPlaceholder('At least 8 characters').fill('test-password');
+    await page.getByText('Create account', { exact: true }).click();
+    await page.getByText('Verify your email', { exact: true }).waitFor();
+    assert.equal(registrations.length, 1);
+    assert.deepEqual(registrations[0], {
+      method: 'email',
+      identifier: 'signup-test@example.invalid',
+      password: 'test-password',
+      firstName: 'Ana',
+      lastName: 'Santos',
+      address: 'Test address',
+      accountType: 'household',
+    });
+    assert.deepEqual(requests, []);
+  } finally { await context.close(); }
+});
+
+test('customer signup demo uses fictional details without contacting Auth or the API', { timeout: 15_000 }, async () => {
+  const { context, page, requests, errors } = await newContext(sessionFor('customer'), { signedOut: true });
+  const authRequests = [];
+  page.on('request', request => {
+    if (new URL(request.url()).origin === authOrigin) authRequests.push(request.method());
+  });
+  try {
+    await page.goto(`${baseUrl}/demo/signup`);
+    await page.getByRole('heading', { name: 'Demo privacy notice' }).waitFor();
+    assert.equal(await page.getByText('customer@example.invalid', { exact: true }).count(), 0);
+
+    await page.getByRole('button', { name: 'I understand', exact: true }).click();
+    await page.getByText('customer@example.invalid', { exact: true }).waitFor();
+    assert.equal(await page.locator('input, textarea').count(), 0);
+    await page.getByRole('button', { name: 'Finish demo', exact: true }).click();
+    await page.getByRole('heading', { name: 'Demo complete' }).waitFor();
+
+    await page.reload();
+    await page.getByRole('heading', { name: 'Demo privacy notice' }).waitFor();
+    await page.getByRole('button', { name: 'Back to sign in' }).click();
+    await expectPath(page, '/login');
+    assert.deepEqual(authRequests, []);
+    assert.deepEqual(requests, []);
     assert.deepEqual(errors, []);
   } finally { await context.close(); }
 });
