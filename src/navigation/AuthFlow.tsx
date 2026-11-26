@@ -67,6 +67,7 @@ export function AuthFlow() {
                 lastName: signupDraft.lastName,
                 address: signupDraft.address,
                 accountType: signupDraft.accountType,
+                privacyNoticeVersion: signupDraft.privacyNoticeVersion,
               });
               if (result.error) return result.error;
               if (result.needsConfirmation) {

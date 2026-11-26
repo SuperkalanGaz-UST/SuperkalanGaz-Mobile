@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   KeyboardAvoidingView,
   Platform,
@@ -10,10 +10,13 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PhoneField, PrimaryButton, TextField } from '@/components/ui/controls';
+import { apiErrorMessage, apiPublicFetch } from '@/lib/api';
 import { normalizePhMobile } from '@/lib/phMobile';
 import { colors } from '@/theme/colors';
 import { fonts } from '@/theme/fonts';
 import type { AccountType, SignupDraft } from '@/navigation/types';
+
+type PrivacyNotice = { version: string; text: string };
 
 export function SignUpScreen({
   account,
@@ -37,9 +40,41 @@ export function SignUpScreen({
   const [password, setPassword] = useState(initialDraft?.password ?? '');
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<PrivacyNotice | null>(null);
+  const [noticeError, setNoticeError] = useState('');
+  const [noticeAttempt, setNoticeAttempt] = useState(0);
+  const [consentAccepted, setConsentAccepted] = useState(false);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const response = await apiPublicFetch('/auth/registration-privacy-notice', { signal: controller.signal });
+        const data: unknown = await response.json().catch(() => null);
+        if (!response.ok) throw new Error(apiErrorMessage(data, 'The registration privacy notice is unavailable.'));
+        if (!data || typeof data !== 'object' || !('version' in data) || !('text' in data) ||
+          typeof data.version !== 'string' || !data.version || typeof data.text !== 'string' || !data.text) {
+          throw new Error('The registration privacy notice is unavailable.');
+        }
+        if (!controller.signal.aborted) setNotice({ version: data.version, text: data.text });
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          setNoticeError(error instanceof Error ? error.message : 'The registration privacy notice is unavailable.');
+        }
+      }
+    })();
+    return () => controller.abort();
+  }, [noticeAttempt]);
+
+  const reloadNotice = () => {
+    setConsentAccepted(false);
+    setNotice(null);
+    setNoticeError('');
+    setNoticeAttempt((attempt) => attempt + 1);
+  };
 
   const submit = async () => {
-    if (busy) return;
+    if (busy || !notice || !consentAccepted) return;
     const nextErrors: Record<string, string> = {};
     if (!firstName.trim()) nextErrors.firstName = 'First name is required';
     if (!lastName.trim()) nextErrors.lastName = 'Last name is required';
@@ -74,9 +109,13 @@ export function SignUpScreen({
       address: address.trim(),
       password,
       accountType: account,
+      privacyNoticeVersion: notice.version,
     });
     setBusy(false);
-    if (error) setErrors({ form: error });
+    if (error) {
+      setErrors({ form: error });
+      if (error.startsWith('The privacy notice has changed')) reloadNotice();
+    }
   };
 
   return (
@@ -93,89 +132,116 @@ export function SignUpScreen({
           <Text style={styles.back}>‹  Back to sign in</Text>
         </Pressable>
         <Text style={styles.title}>Create your account</Text>
-        <Text style={styles.subtitle}>Choose the customer account that fits you.</Text>
-
         <View style={styles.card}>
-          <Text style={styles.label}>Account type</Text>
-          <View style={styles.segment}>
-            {(['household', 'commercial'] as const).map((value) => (
+          <Text style={styles.noticeTitle} accessibilityRole="header">Registration privacy notice</Text>
+          {notice ? (
+            <>
+              <Text style={styles.noticeText}>{notice.text}</Text>
               <Pressable
-                key={value}
-                accessibilityRole="button"
-                accessibilityState={{ selected: account === value }}
-                onPress={() => onAccountChange(value)}
-                style={[styles.segmentItem, account === value && styles.segmentItemActive]}
+                accessibilityRole="checkbox"
+                accessibilityState={{ checked: consentAccepted, disabled: busy }}
+                aria-checked={consentAccepted}
+                disabled={busy}
+                onPress={() => setConsentAccepted((accepted) => !accepted)}
+                style={styles.consentRow}
               >
-                <Text style={[styles.segmentText, account === value && styles.segmentTextActive]}>
-                  {value === 'household' ? 'Household' : 'Commercial'}
+                <Text style={styles.checkboxMark} accessibilityElementsHidden importantForAccessibility="no">
+                  {consentAccepted ? '☑' : '☐'}
                 </Text>
+                <Text style={styles.consentLabel}>I consent to the use of my registration details as described in this notice.</Text>
               </Pressable>
-            ))}
-          </View>
-
-          <View style={styles.field}>
-            <Text style={styles.label}>Name</Text>
-            <TextField
-              placeholder="First name"
-              value={firstName}
-              onChangeText={setFirstName}
-              error={errors.firstName}
-              autoCapitalize="words"
-            />
-            <TextField
-              placeholder="Last name"
-              value={lastName}
-              onChangeText={setLastName}
-              error={errors.lastName}
-              autoCapitalize="words"
-            />
-          </View>
-
-          <TextField
-            label="Email address"
-            placeholder="name@example.com"
-            value={email}
-            onChangeText={setEmail}
-            error={errors.email}
-            keyboardType="email-address"
-            autoCapitalize="none"
-          />
-
-          <PhoneField
-            label="Mobile number"
-            value={mobileNumber}
-            onChangeText={setMobileNumber}
-            error={errors.mobileNumber}
-          />
-
-          <TextField
-            label={account === 'commercial' ? 'Business address' : 'Address'}
-            placeholder="Street, barangay, city"
-            value={address}
-            onChangeText={setAddress}
-            error={errors.address}
-            autoCapitalize="sentences"
-          />
-
-          <TextField
-            label="Password"
-            placeholder="At least 8 characters"
-            value={password}
-            onChangeText={setPassword}
-            error={errors.password}
-            secure
-          />
-
-          {errors.form ? <Text style={styles.formError}>{errors.form}</Text> : null}
-          <PrimaryButton
-            label={busy ? 'Creating account…' : 'Create account'}
-            onPress={() => void submit()}
-            disabled={busy}
-          />
-          <Text style={styles.footnote}>
-            Sign in with your email and password. Your mobile number is for contact only.
-          </Text>
+            </>
+          ) : noticeError ? (
+            <>
+              <Text style={styles.formError} accessibilityRole="alert">{noticeError}</Text>
+              <PrimaryButton label="Retry" onPress={reloadNotice} />
+            </>
+          ) : <Text style={styles.subtitle}>Loading privacy notice…</Text>}
         </View>
+
+        {notice && consentAccepted && (
+          <View style={styles.card}>
+            <Text style={styles.label}>Account type</Text>
+            <View style={styles.segment}>
+              {(['household', 'commercial'] as const).map((value) => (
+                <Pressable
+                  key={value}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: account === value }}
+                  onPress={() => onAccountChange(value)}
+                  style={[styles.segmentItem, account === value && styles.segmentItemActive]}
+                >
+                  <Text style={[styles.segmentText, account === value && styles.segmentTextActive]}>
+                    {value === 'household' ? 'Household' : 'Commercial'}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+
+            <View style={styles.field}>
+              <Text style={styles.label}>Name</Text>
+              <TextField
+                placeholder="First name"
+                value={firstName}
+                onChangeText={setFirstName}
+                error={errors.firstName}
+                autoCapitalize="words"
+              />
+              <TextField
+                placeholder="Last name"
+                value={lastName}
+                onChangeText={setLastName}
+                error={errors.lastName}
+                autoCapitalize="words"
+              />
+            </View>
+
+            <TextField
+              label="Email address"
+              placeholder="name@example.com"
+              value={email}
+              onChangeText={setEmail}
+              error={errors.email}
+              keyboardType="email-address"
+              autoCapitalize="none"
+            />
+
+            <PhoneField
+              label="Mobile number"
+              value={mobileNumber}
+              onChangeText={setMobileNumber}
+              error={errors.mobileNumber}
+            />
+
+            <TextField
+              label={account === 'commercial' ? 'Business address' : 'Address'}
+              placeholder="Street, barangay, city"
+              value={address}
+              onChangeText={setAddress}
+              error={errors.address}
+              autoCapitalize="sentences"
+            />
+
+            <TextField
+              label="Password"
+              placeholder="At least 8 characters"
+              value={password}
+              onChangeText={setPassword}
+              error={errors.password}
+              secure
+            />
+
+            {errors.form ? <Text style={styles.formError}>{errors.form}</Text> : null}
+            <PrimaryButton
+              label={busy ? 'Creating account…' : 'Create account'}
+              onPress={() => void submit()}
+              disabled={busy}
+            />
+            <Text style={styles.footnote}>
+              Sign in with your email and password. Your mobile number is for contact only.
+            </Text>
+          </View>
+        )}
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -190,6 +256,11 @@ const styles = StyleSheet.create({
   card: { backgroundColor: '#fff', borderRadius: 22, padding: 22, gap: 18 },
   field: { gap: 10 },
   label: { color: colors.label, fontFamily: fonts.medium, fontSize: 13 },
+  noticeTitle: { color: colors.heading, fontFamily: fonts.bold, fontSize: 16 },
+  noticeText: { color: colors.label, fontFamily: fonts.regular, fontSize: 14, lineHeight: 21 },
+  consentRow: { flexDirection: 'row', minHeight: 44, alignItems: 'center', gap: 10 },
+  checkboxMark: { color: colors.primary, fontSize: 24 },
+  consentLabel: { flex: 1, color: colors.label, fontFamily: fonts.medium, fontSize: 14 },
   segment: {
     flexDirection: 'row',
     padding: 4,

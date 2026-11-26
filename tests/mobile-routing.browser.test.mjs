@@ -177,6 +177,7 @@ test('signup and password recovery have public routes without putting recovery p
     await expectPath(page, '/signup');
     await page.goBack();
     await page.getByText('Welcome back!', { exact: true }).waitFor();
+    requests.length = 0;
     await page.getByText('Forgot password?', { exact: true }).click();
     await expectPath(page, '/forgot-password');
     await page.getByPlaceholder('Email Address', { exact: true }).fill('routes@example.invalid');
@@ -194,6 +195,41 @@ test('signup and password recovery have public routes without putting recovery p
     await page.getByPlaceholder('Email Address', { exact: true }).waitFor();
     assert.equal(requests.length, 0, 'Reloading an unfinished recovery must remain signed out');
     assert.deepEqual(errors, []);
+  } finally { await context.close(); }
+});
+
+test('customer signup collects details after notice acceptance and sends its version', { timeout: 30_000 }, async () => {
+  const { context, page } = await newContext(sessionFor('customer'), { signedOut: true });
+  try {
+    const noticeText = 'Registration notice for this test only.';
+    let registrations = 0;
+    await context.route('**/api/auth/registration-privacy-notice', route => route.fulfill({
+      json: { version: 'test-v1', text: noticeText },
+    }));
+    await context.route('**/api/auth/register', route => {
+      registrations++;
+      assert.equal(route.request().method(), 'POST');
+      const { privacyNoticeVersion, privacyConsentAccepted } = route.request().postDataJSON();
+      assert.equal(privacyNoticeVersion, 'test-v1');
+      assert.equal(privacyConsentAccepted, true);
+      return route.fulfill({ status: 201, json: { needsConfirmation: true } });
+    });
+    await page.goto(`${baseUrl}/signup`);
+    await page.getByText(noticeText).waitFor();
+    const consent = page.getByRole('checkbox');
+    assert.equal(await consent.getAttribute('aria-checked'), 'false');
+    assert.equal(await page.getByPlaceholder('First name').count(), 0);
+    assert.equal(registrations, 0);
+
+    await consent.click();
+    await page.getByPlaceholder('First name').fill('Ana');
+    await page.getByPlaceholder('Last name').fill('Santos');
+    await page.getByPlaceholder('name@example.com').fill('signup-test@example.invalid');
+    await page.getByPlaceholder('Street, barangay, city').fill('Test address');
+    await page.getByPlaceholder('At least 8 characters').fill('test-password');
+    await page.getByText('Create account', { exact: true }).click();
+    await page.getByText('Verify your email', { exact: true }).waitFor();
+    assert.equal(registrations, 1);
   } finally { await context.close(); }
 });
 

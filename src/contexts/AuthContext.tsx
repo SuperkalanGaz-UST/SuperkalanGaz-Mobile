@@ -32,6 +32,7 @@ export interface SignUpInput {
   lastName: string;
   address: string;
   accountType: AccountType;
+  privacyNoticeVersion: string;
 }
 
 export interface ProfileUpdateInput {
@@ -364,6 +365,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               lastName: input.lastName,
               address: input.address,
               accountType: input.accountType,
+              privacyNoticeVersion: input.privacyNoticeVersion,
+              privacyConsentAccepted: true,
             }),
           });
           const data: unknown = await response.json().catch(() => null);
