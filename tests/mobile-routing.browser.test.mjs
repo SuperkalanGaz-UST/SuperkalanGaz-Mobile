@@ -198,38 +198,62 @@ test('signup and password recovery have public routes without putting recovery p
   } finally { await context.close(); }
 });
 
-test('customer signup collects details after notice acceptance and sends its version', { timeout: 30_000 }, async () => {
-  const { context, page } = await newContext(sessionFor('customer'), { signedOut: true });
+test('normal signup shows a local privacy notice and continues to email verification', { timeout: 20_000 }, async () => {
+  const { context, page, requests } = await newContext(sessionFor('customer'), {
+    signedOut: true, viewport: { width: 320, height: 380 },
+  });
+  const registrations = [];
   try {
-    const noticeText = 'Registration notice for this test only.';
-    let registrations = 0;
-    await context.route('**/api/auth/registration-privacy-notice', route => route.fulfill({
-      json: { version: 'test-v1', text: noticeText },
-    }));
     await context.route('**/api/auth/register', route => {
-      registrations++;
       assert.equal(route.request().method(), 'POST');
-      const { privacyNoticeVersion, privacyConsentAccepted } = route.request().postDataJSON();
-      assert.equal(privacyNoticeVersion, 'test-v1');
-      assert.equal(privacyConsentAccepted, true);
-      return route.fulfill({ status: 201, json: { needsConfirmation: true } });
+      registrations.push(route.request().postDataJSON());
+      return route.fulfill({ json: { needsConfirmation: true } });
     });
-    await page.goto(`${baseUrl}/signup`);
-    await page.getByText(noticeText).waitFor();
-    const consent = page.getByRole('checkbox');
-    assert.equal(await consent.getAttribute('aria-checked'), 'false');
+    await page.goto(baseUrl);
+    await page.getByText('Sign Up', { exact: true }).click();
+    await expectPath(page, '/signup');
+    const dialog = page.getByRole('dialog', { name: 'Registration privacy notice' });
+    await dialog.getByText('Temporary notice', { exact: true }).waitFor();
     assert.equal(await page.getByPlaceholder('First name').count(), 0);
-    assert.equal(registrations, 0);
 
-    await consent.click();
+    const understand = dialog.getByRole('button', { name: 'I understand' });
+    const footer = await understand.boundingBox();
+    assert.ok(footer && footer.y + footer.height <= 380);
+    const noticeScroll = await dialog.getByTestId('signup-privacy-notice-body').evaluate(element => {
+      element.scrollTop = element.scrollHeight;
+      return element.scrollTop;
+    });
+    assert.ok(noticeScroll > 0, 'The privacy notice body should scroll on short screens');
+    assert.equal((await understand.boundingBox()).y, footer.y);
+
+    await dialog.getByRole('button', { name: 'Back', exact: true }).click();
+    await expectPath(page, '/login');
+    assert.equal(registrations.length, 0);
+    await page.getByText('Sign Up', { exact: true }).click();
+    await dialog.getByRole('button', { name: 'I understand' }).click();
+    await dialog.waitFor({ state: 'hidden' });
     await page.getByPlaceholder('First name').fill('Ana');
+    await page.getByRole('button', { name: 'View privacy notice' }).click();
+    await dialog.getByRole('button', { name: 'Done', exact: true }).click();
+    await dialog.waitFor({ state: 'hidden' });
+    assert.equal(await page.getByPlaceholder('First name').inputValue(), 'Ana');
     await page.getByPlaceholder('Last name').fill('Santos');
     await page.getByPlaceholder('name@example.com').fill('signup-test@example.invalid');
     await page.getByPlaceholder('Street, barangay, city').fill('Test address');
     await page.getByPlaceholder('At least 8 characters').fill('test-password');
     await page.getByText('Create account', { exact: true }).click();
     await page.getByText('Verify your email', { exact: true }).waitFor();
-    assert.equal(registrations, 1);
+    assert.equal(registrations.length, 1);
+    assert.deepEqual(registrations[0], {
+      method: 'email',
+      identifier: 'signup-test@example.invalid',
+      password: 'test-password',
+      firstName: 'Ana',
+      lastName: 'Santos',
+      address: 'Test address',
+      accountType: 'household',
+    });
+    assert.deepEqual(requests, []);
   } finally { await context.close(); }
 });
 

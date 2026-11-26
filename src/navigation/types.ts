@@ -26,7 +26,6 @@ export interface SignupDraft {
   address: string;
   password: string;
   accountType: AccountType;
-  privacyNoticeVersion: string;
 }
 
 // ── Main app ─────────────────────────────────────────────────────────────────

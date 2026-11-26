@@ -68,7 +68,6 @@ export function AuthFlow() {
                 lastName: signupDraft.lastName,
                 address: signupDraft.address,
                 accountType: signupDraft.accountType,
-                privacyNoticeVersion: signupDraft.privacyNoticeVersion,
               });
               if (result.error) return result.error;
               if (result.needsConfirmation) {
@@ -153,7 +152,17 @@ export function AuthFlow() {
     <Stack.Navigator initialRouteName="login" screenOptions={{ headerShown: false, animation: 'none' }}>
       {(['login', 'signup', 'forgot'] as const).map((screen) => (
         <Stack.Screen key={screen} name={screen}>
-          {({ route, navigation }) => <View style={{ flex: 1 }}>{render(route.name, (next) => navigation.navigate(next))}</View>}
+          {({ route, navigation }) => (
+            <View style={{ flex: 1 }}>
+              {render(route.name, (next) => {
+                if (route.name === 'signup' && next === 'login') {
+                  navigation.popTo('login');
+                } else {
+                  navigation.navigate(next);
+                }
+              })}
+            </View>
+          )}
         </Stack.Screen>
       ))}
       <Stack.Screen name="signup-demo">
