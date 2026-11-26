@@ -44,7 +44,7 @@ export interface MainNavigateOptions {
 
 export type CustomerStack = { [Screen in MainScreen]: MainNavigateOptions | undefined };
 export type PublicAuthScreen = 'login' | 'signup' | 'forgot';
-export type AuthStack = { [Screen in PublicAuthScreen]: undefined };
+export type AuthStack = { [Screen in PublicAuthScreen | 'signup-demo']: undefined };
 export type DeliveryRiderStack = {
   home: undefined;
   delivery: undefined;

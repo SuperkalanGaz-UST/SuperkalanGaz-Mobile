@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { View } from 'react-native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { LoginScreen } from '@/screens/auth/LoginScreen';
+import { SignUpDemoScreen } from '@/screens/auth/SignUpDemoScreen';
 import { SignUpScreen } from '@/screens/auth/SignUpScreen';
 import { SignUpOtpScreen } from '@/screens/auth/SignUpOtpScreen';
 import {
@@ -155,6 +156,9 @@ export function AuthFlow() {
           {({ route, navigation }) => <View style={{ flex: 1 }}>{render(route.name, (next) => navigation.navigate(next))}</View>}
         </Stack.Screen>
       ))}
+      <Stack.Screen name="signup-demo">
+        {({ navigation }) => <SignUpDemoScreen onExit={() => navigation.navigate('login')} />}
+      </Stack.Screen>
     </Stack.Navigator>
   );
 }

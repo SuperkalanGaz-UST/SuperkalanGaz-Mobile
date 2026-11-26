@@ -233,6 +233,33 @@ test('customer signup collects details after notice acceptance and sends its ver
   } finally { await context.close(); }
 });
 
+test('customer signup demo uses fictional details without contacting Auth or the API', { timeout: 15_000 }, async () => {
+  const { context, page, requests, errors } = await newContext(sessionFor('customer'), { signedOut: true });
+  const authRequests = [];
+  page.on('request', request => {
+    if (new URL(request.url()).origin === authOrigin) authRequests.push(request.method());
+  });
+  try {
+    await page.goto(`${baseUrl}/demo/signup`);
+    await page.getByRole('heading', { name: 'Demo privacy notice' }).waitFor();
+    assert.equal(await page.getByText('customer@example.invalid', { exact: true }).count(), 0);
+
+    await page.getByRole('button', { name: 'I understand', exact: true }).click();
+    await page.getByText('customer@example.invalid', { exact: true }).waitFor();
+    assert.equal(await page.locator('input, textarea').count(), 0);
+    await page.getByRole('button', { name: 'Finish demo', exact: true }).click();
+    await page.getByRole('heading', { name: 'Demo complete' }).waitFor();
+
+    await page.reload();
+    await page.getByRole('heading', { name: 'Demo privacy notice' }).waitFor();
+    await page.getByRole('button', { name: 'Back to sign in' }).click();
+    await expectPath(page, '/login');
+    assert.deepEqual(authRequests, []);
+    assert.deepEqual(requests, []);
+    assert.deepEqual(errors, []);
+  } finally { await context.close(); }
+});
+
 test('Commercial Customer guide dims the bottom navigation and restores the white Home background', { timeout: 15_000 }, async () => {
   const session = sessionFor('customer');
   session.user.app_metadata.account_type = 'commercial';
