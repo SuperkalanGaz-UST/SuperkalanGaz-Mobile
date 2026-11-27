@@ -1,11 +1,10 @@
-import { useRef, useState } from 'react';
+import { useRef, useState, type ComponentRef } from 'react';
 import {
   Pressable,
   StyleSheet,
   Text,
   TextInput,
   View,
-  type TextInputInstance,
   type TextInputProps,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
@@ -193,7 +192,7 @@ export function OtpInput({
   value: string[];
   onChange: (v: string[]) => void;
 }) {
-  const refs = useRef<(TextInputInstance | null)[]>([]);
+  const refs = useRef<(ComponentRef<typeof TextInput> | null)[]>([]);
 
   const handleChange = (idx: number, ch: string) => {
     const digit = ch.replace(/\D/g, '').slice(-1);

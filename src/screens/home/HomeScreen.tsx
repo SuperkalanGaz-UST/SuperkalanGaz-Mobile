@@ -367,7 +367,8 @@ export function HomeScreen({
         }
 
         // React Native's measureLayout requires the native content view ref.
-        const content: NativeView | null = scroll.getInnerViewRef();
+        // SDK 57 exposes this at runtime but omits it from ScrollView's TS declarations.
+        const content = (scroll as typeof scroll & { getInnerViewRef: () => NativeView | null }).getInnerViewRef();
         if (!content) {
           nextFrame();
           return;

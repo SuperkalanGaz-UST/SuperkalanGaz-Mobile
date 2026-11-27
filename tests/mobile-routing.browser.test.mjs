@@ -1019,6 +1019,7 @@ test('Household Customers choose the pickup branch and preview the reward before
         catalogItems: [
           { id: 'notebook-first', franchise_reward_id: 'notebook', branch_id: 'first', branch_name: 'First branch', name: 'Notebook and Pen', points_cost: 10, stock_qty: 0 },
           { id: 'notebook-chosen', franchise_reward_id: 'notebook', branch_id: 'chosen', branch_name: 'Chosen branch', name: 'Notebook and Pen', points_cost: 10, stock_qty: 3 },
+          { id: 'shaker-chosen', franchise_reward_id: 'shaker', branch_id: 'chosen', branch_name: 'Chosen branch', name: 'Protein Shaker', points_cost: 40, stock_qty: 3 },
         ],
       } });
     });
@@ -1038,6 +1039,13 @@ test('Household Customers choose the pickup branch and preview the reward before
     await page.getByText('Out of stock', { exact: false }).waitFor();
     await page.getByRole('button', { name: 'Pickup branch: First branch' }).click();
     await page.getByRole('radio', { name: 'Chosen branch', exact: true }).click();
+    const notebook = page.getByRole('button', { name: /Notebook and Pen/ });
+    const shaker = page.getByRole('button', { name: /Protein Shaker/ });
+    assert.equal(await notebook.isEnabled(), true);
+    assert.equal(await shaker.isDisabled(), true);
+    await shaker.locator('img').evaluate(image => image.decode());
+    assert.match(await shaker.locator('img').getAttribute('src'), /reward-protein-shaker/);
+    await page.getByRole('button', { name: 'View all rewards', exact: true }).click();
     await recordSheetFrames(page, 'reward-sheet');
     await page.getByText('Notebook and Pen', { exact: true }).click();
     await assertSheetOpened(page);

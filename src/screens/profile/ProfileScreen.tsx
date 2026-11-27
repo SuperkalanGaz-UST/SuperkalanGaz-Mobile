@@ -9,7 +9,7 @@ import { AppHeader } from '@/components/ui/AppHeader';
 import { AppRefreshControl } from '@/components/ui/AppRefreshControl';
 import { BottomNav } from '@/components/ui/BottomNav';
 import { PhoneField } from '@/components/ui/controls';
-import { BottomSheetModal } from '@/components/ui/overlays';
+import { BottomSheetModal, Toast } from '@/components/ui/overlays';
 import { usePullToRefresh } from '@/hooks/usePullToRefresh';
 import { normalizePhMobile } from '@/lib/phMobile';
 import type { MainNavigateOptions, MainScreen, ProfileSection } from '@/navigation/types';
@@ -46,6 +46,12 @@ export function ProfileScreen({
   const [profileMessage, setProfileMessage] = useState('');
   const [profileError, setProfileError] = useState('');
   const [resetOpen, setResetOpen] = useState(false);
+
+  useEffect(() => {
+    if (!profileMessage) return;
+    const timer = setTimeout(() => setProfileMessage(''), 2500);
+    return () => clearTimeout(timer);
+  }, [profileMessage]);
 
   const metadata = session?.user.user_metadata;
   const sessionFirstName = metadataText(metadata?.first_name);
@@ -222,7 +228,6 @@ export function ProfileScreen({
               )}
             </View>
             {profileError ? <Text style={styles.profileError}>{profileError}</Text> : null}
-            {profileMessage ? <Text style={styles.profileMessage}>{profileMessage}</Text> : null}
             <Text style={styles.fieldLabel}>Password</Text>
             <View style={styles.fieldBox}>
               <Text style={styles.fieldValue}>••••••••••</Text>
@@ -287,6 +292,7 @@ export function ProfileScreen({
       </BottomSheetModal>
 
       <BottomNav active="more" onNavigate={onNavigate} />
+      <Toast message={profileMessage} />
     </View>
   );
 }
@@ -322,7 +328,6 @@ const styles = StyleSheet.create({
   fieldValue: { fontFamily: fonts.regular, fontSize: 14, color: colors.muted },
   fieldInput: { height: 38, borderWidth: 1, borderColor: colors.muted, borderRadius: radii.card, paddingHorizontal: 12, fontFamily: fonts.regular, fontSize: 14, color: colors.heading },
   profileError: { fontFamily: fonts.regular, fontSize: 11, color: colors.danger, marginBottom: 8 },
-  profileMessage: { fontFamily: fonts.regular, fontSize: 11, color: colors.success, marginBottom: 8 },
   resetLink: { fontFamily: fonts.regular, fontSize: 10, color: colors.primary, marginTop: 4 },
 
   prefRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: colors.prefRowBg, borderRadius: 12, paddingHorizontal: 12, height: 48, marginBottom: 8 },
