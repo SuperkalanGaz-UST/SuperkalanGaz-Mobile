@@ -8,8 +8,11 @@ export type PriceMap = Partial<Record<CylinderSize, number>>;
 interface PriceRow {
   cylinder_size: CylinderSize;
   unit_price: number;
+  in_stock?: boolean;
   available_qty?: number;
 }
+
+type StockAvailability = Partial<Record<CylinderSize, boolean>>;
 
 interface PricingValue {
   prices: PriceMap;
@@ -68,12 +71,12 @@ export function usePricing(): PricingValue {
   return value;
 }
 
-/** Checkout prices and quantities both come from the selected branch. */
-export function useBranchPricing(branchId: string | null): PricingValue & { available: Partial<Record<CylinderSize, number>> } {
+/** Checkout prices and stock availability both come from the selected branch. */
+export function useBranchPricing(branchId: string | null): PricingValue & { inStock: StockAvailability } {
   const generation = useRef(0);
   const controllerRef = useRef<AbortController | null>(null);
   const [result, setResult] = useState<{
-    branchId: string; prices: PriceMap; available: Partial<Record<CylinderSize, number>>; loading: boolean; error: string | null;
+    branchId: string; prices: PriceMap; inStock: StockAvailability; loading: boolean; error: string | null;
   } | null>(null);
   const refresh = useCallback(async () => {
     controllerRef.current?.abort();
@@ -82,20 +85,27 @@ export function useBranchPricing(branchId: string | null): PricingValue & { avai
     const controller = new AbortController();
     controllerRef.current = controller;
     const timeout = setTimeout(() => controller.abort(), 10000);
-    setResult({ branchId, prices: {}, available: {}, loading: true, error: null });
+    setResult({ branchId, prices: {}, inStock: {}, loading: true, error: null });
     try {
       const response = await apiFetch(`/prices/for-branch/${encodeURIComponent(branchId)}`, { signal: controller.signal, cache: 'no-store' });
       const data: unknown = await response.json().catch(() => null);
       if (!response.ok) throw new Error(apiErrorMessage(data, 'Could not load branch LPG prices.'));
       const rows = priceRowsFrom(data);
-      if (rows.some(({ available_qty }) => available_qty === undefined || !Number.isInteger(available_qty) || available_qty < 0)) {
-        throw new Error('Could not confirm branch stock. Please retry.');
+      const inStock: StockAvailability = {};
+      for (const { cylinder_size, in_stock, available_qty } of rows) {
+        if (typeof in_stock === 'boolean') {
+          inStock[cylinder_size] = in_stock;
+        } else if (available_qty !== undefined && Number.isInteger(available_qty) && available_qty >= 0) {
+          // Existing API deployments can still serve this client during rollout.
+          inStock[cylinder_size] = available_qty > 0;
+        } else {
+          throw new Error('Could not confirm branch stock. Please retry.');
+        }
       }
       const prices = priceMapFrom(rows);
-      const available = Object.fromEntries(rows.map((row) => [row.cylinder_size, row.available_qty]));
-      if (requestId === generation.current) setResult({ branchId, prices, available, loading: false, error: null });
+      if (requestId === generation.current) setResult({ branchId, prices, inStock, loading: false, error: null });
     } catch (error: unknown) {
-      if (requestId === generation.current) setResult({ branchId, prices: {}, available: {}, loading: false, error: controller.signal.aborted ? 'Branch availability took too long to load. Please retry.' : error instanceof Error ? error.message : 'Could not load branch availability.' });
+      if (requestId === generation.current) setResult({ branchId, prices: {}, inStock: {}, loading: false, error: controller.signal.aborted ? 'Branch availability took too long to load. Please retry.' : error instanceof Error ? error.message : 'Could not load branch availability.' });
     } finally { clearTimeout(timeout); }
   }, [branchId]);
   useEffect(() => {
@@ -106,7 +116,7 @@ export function useBranchPricing(branchId: string | null): PricingValue & { avai
   const current = result?.branchId === branchId ? result : null;
   return {
     prices: current?.prices ?? {},
-    available: current?.available ?? {},
+    inStock: current?.inStock ?? {},
     loading: branchId !== null && (!current || current.loading),
     error: current?.error ?? null,
     refresh,

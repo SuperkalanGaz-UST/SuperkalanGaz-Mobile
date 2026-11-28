@@ -825,6 +825,61 @@ test('closing tracking after checkout returns to Home after placing just one ord
   } finally { await context.close(); }
 });
 
+test('order details show the saved branch and wrap a long address on a narrow screen', { timeout: 15_000 }, async () => {
+  const order = {
+    id: '00000000-0000-4000-8000-000000000006', status: 'Pending',
+    branch_id: '00000000-0000-4000-8000-000000000002', branch_name: 'Superkalan Gaz UST Frassati',
+    delivery_address: 'J. Fajardo Street, Tambo, City of Manila, National Capital Region',
+    cylinder_size: '5kg', quantity: 1, total_amount: 350, requested_at: '2026-11-20T01:00:00Z',
+    payment_method: 'Cash on Delivery',
+  };
+  const { context, page } = await newContext(sessionFor('customer'), {
+    orders: [order], viewport: { width: 320, height: 625 },
+  });
+  try {
+    await page.goto(`${baseUrl}/customer/orders`);
+    await page.getByText('View Order Details', { exact: true }).click({ timeout: 5_000 });
+    await page.getByText(order.branch_name, { exact: true }).waitFor({ timeout: 3_000 });
+    assert.equal(await page.getByText(order.branch_id, { exact: true }).count(), 0);
+    const address = await page.getByText(order.delivery_address, { exact: true }).boundingBox();
+    assert.ok(address && address.x + address.width <= 320, 'The delivery address must fit the viewport');
+  } finally { await context.close(); }
+});
+
+test('all four tracking labels fit on a narrow screen without clipping', { timeout: 15_000 }, async () => {
+  const order = {
+    id: '00000000-0000-4000-8000-000000000006', status: 'Pending',
+    branch_id: 'historical-branch', branch_name: 'Superkalan Gaz UST Frassati',
+    cylinder_size: '11kg', quantity: 1, requested_at: '2026-11-20T01:00:00Z',
+    payment_method: 'Cash on Delivery',
+  };
+  const { context, page } = await newContext(sessionFor('customer'), {
+    orders: [order], viewport: { width: 320, height: 625 }, reducedMotion: 'reduce',
+  });
+  try {
+    await page.goto(`${baseUrl}/customer/order/${order.id}`);
+    await page.getByText(`${order.branch_name} has confirmed your order and is preparing it.`, { exact: true }).waitFor({ timeout: 5_000 });
+    const bounds = [];
+    for (const label of ['Order Confirmed', 'Preparing', 'Out for Delivery', 'Delivered']) {
+      bounds.push(await page.getByText(label, { exact: true }).evaluate(element => {
+        const range = document.createRange();
+        range.selectNodeContents(element);
+        const text = range.getBoundingClientRect();
+        const box = element.getBoundingClientRect();
+        const tolerance = 1; // Glyph bounds may extend slightly past the line box in WebKit.
+        return { label: element.textContent, left: box.left, right: box.right,
+          textFits: text.left >= box.left - tolerance && text.right <= box.right + tolerance
+            && text.bottom <= box.bottom + tolerance };
+      }, undefined, { timeout: 5_000 }));
+    }
+    for (const [index, bound] of bounds.entries()) {
+      assert.ok(bound.textFits, `${bound.label} must show in full`);
+      assert.ok(bound.left >= (bounds[index - 1]?.right ?? 0) && bound.right <= 320,
+        `${bound.label} must fit without overlapping its neighbors`);
+    }
+  } finally { await context.close(); }
+});
+
 test('customer tracking stays Preparing after rider acceptance and advances only when transit starts', { timeout: 30_000 }, async () => {
   const order = {
     id: '00000000-0000-4000-8000-000000000006', status: 'Pending',
@@ -1104,14 +1159,15 @@ test('payment sheet slides over a stationary fading backdrop', { timeout: 15_000
     ] } }));
     await context.route('**/api/prices/for-branch/test-branch', route => route.fulfill({ json: {
       prices: ['50kg', '22kg', '11kg', '5kg', '2.7kg'].map(cylinder_size => ({
-        cylinder_size, unit_price: 1200, available_qty: cylinder_size === '11kg' ? 1 : 0,
+        cylinder_size, unit_price: 1200, in_stock: cylinder_size === '11kg',
       })),
     } }));
     await page.goto(`${baseUrl}/customer/order`);
     await page.getByText('Choose cylinders', { exact: true }).click();
     assert.equal(await page.getByRole('button', { name: '5 KG cylinder, out of stock', exact: true }).isDisabled(), true);
+    assert.equal(await page.getByText(/^\d+ available$/).count(), 0);
     await page.getByRole('button', { name: 'Select 11 KG cylinder' }).click();
-    assert.equal(await page.getByRole('button', { name: 'Add one 11 KG cylinder', exact: true }).isDisabled(), true);
+    assert.equal(await page.getByRole('button', { name: 'Add one 11 KG cylinder', exact: true }).isEnabled(), true);
     await page.getByText('Review order', { exact: true }).click();
     await page.getByText('Deliver now', { exact: true }).click();
     await page.getByRole('button', { name: 'REVIEW ORDER', exact: true }).click();
@@ -1153,18 +1209,18 @@ test('checkout refreshes stock after another order takes the last cylinder', { t
   const { context, page } = await newContext(sessionFor('customer'));
   try {
     page.setDefaultTimeout(4_000);
-    let available = 1;
+    let inStock = true;
     await context.route('**/api/branches/public', route => route.fulfill({ json: { branches: [
       { id: 'test-branch', name: 'Test branch', address: 'Test address', city: null, province: null },
     ] } }));
     await context.route('**/api/prices/for-branch/test-branch', route => route.fulfill({ json: {
       prices: ['50kg', '22kg', '11kg', '5kg', '2.7kg'].map(cylinder_size => ({
-        cylinder_size, unit_price: 1200, available_qty: cylinder_size === '11kg' ? available : 0,
+        cylinder_size, unit_price: 1200, in_stock: cylinder_size === '11kg' && inStock,
       })),
     } }));
     await context.route('**/api/service-requests/customer', route => {
       assert.deepEqual(route.request().postDataJSON().items, [{ cylinderSize: '11kg', quantity: 1 }]);
-      available = 0;
+      inStock = false;
       return route.fulfill({ status: 409, json: { message: 'There is not enough 11kg cylinder stock at this branch.' } });
     });
     await page.goto(`${baseUrl}/customer/order`);
@@ -1183,7 +1239,7 @@ test('checkout refreshes stock after another order takes the last cylinder', { t
     const soldOutCylinder = page.getByRole('button', { name: '11 KG cylinder, out of stock', exact: true });
     assert.equal(await soldOutCylinder.isVisible(), true);
     assert.equal(await soldOutCylinder.isDisabled(), true);
-    available = 1;
+    inStock = true;
     await page.getByRole('button', { name: /Refresh stock/ }).click();
     assert.equal(await page.getByRole('button', { name: 'Select 11 KG cylinder' }).isEnabled(), true);
   } finally { await context.close(); }
