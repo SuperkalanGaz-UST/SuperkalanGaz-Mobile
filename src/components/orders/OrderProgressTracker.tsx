@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { AccessibilityInfo, Animated, AppState, Easing, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { orderProgress } from '@/lib/orderProgress';
@@ -6,7 +6,7 @@ import { colors } from '@/theme/colors';
 import { fonts } from '@/theme/fonts';
 
 const HOME_LABELS = ['Confirmed', 'On the way', 'Delivered'];
-const STATUS_LABELS = ['Order\nConfirmed', 'Preparing', 'Out for Delivery', 'Delivered'];
+const STATUS_LABELS = ['Order Confirmed', 'Preparing', 'Out for Delivery', 'Delivered'];
 
 function ProgressLine({ fill, sweep, moving, green, gray, style }: {
   fill: Animated.AnimatedInterpolation<number>;
@@ -31,7 +31,7 @@ function ProgressLine({ fill, sweep, moving, green, gray, style }: {
   );
 }
 
-/** Shared status/animation; each surface retains its original tracker geometry. */
+/** Shared milestone state and animation for the home and tracking screens. */
 export function OrderProgressTracker({ status, variant = 'home', active = true }: {
   status: string;
   variant?: 'home' | 'status';
@@ -41,8 +41,8 @@ export function OrderProgressTracker({ status, variant = 'home', active = true }
   const labels = variant === 'home' ? HOME_LABELS : STATUS_LABELS;
   const current = variant === 'home' ? [0, 0, 1, 2][milestone.step] : milestone.step;
   const target = current / (labels.length - 1);
-  const fill = useRef(new Animated.Value(target)).current;
-  const sweep = useRef(new Animated.Value(0)).current;
+  const [fill] = useState(() => new Animated.Value(target));
+  const [sweep] = useState(() => new Animated.Value(0));
   // Start static until the OS preference is known, avoiding a motion flash.
   const [reduceMotion, setReduceMotion] = useState(true);
   const [foreground, setForeground] = useState(!AppState.currentState || AppState.currentState === 'active');
@@ -82,6 +82,7 @@ export function OrderProgressTracker({ status, variant = 'home', active = true }
 
   const line = (index: number, green: string, gray: string, style: StyleProp<ViewStyle>) => (
     <ProgressLine
+      key={labels[index]}
       fill={fill.interpolate({ inputRange: [index / (labels.length - 1), (index + 1) / (labels.length - 1)], outputRange: [0, 1], extrapolate: 'clamp' })}
       sweep={sweep} moving={moving && index === current}
       green={green} gray={gray} style={style}
@@ -113,31 +114,23 @@ export function OrderProgressTracker({ status, variant = 'home', active = true }
 
   return (
     <View style={styles.stepper}>
+      <View style={styles.statusLines}>
+        {labels.slice(1).map((_, index) => line(index, colors.greenBright, colors.stepIdle, styles.stepLine))}
+      </View>
       {labels.map((label, index) => {
         const completed = index < current || milestone.complete;
         const selected = index === current && !milestone.complete;
-        const last = index === labels.length - 1;
         return (
-          <View key={label} style={{ flex: last ? 0 : 1 }}>
-            <View style={styles.stepRow}>
-              <View style={[styles.stepNode, {
-                backgroundColor: completed ? colors.greenBright : '#fff',
-                borderColor: completed ? colors.greenBright : selected ? '#8db5f6' : colors.stepIdle,
-              }]}>
-                {completed ? <Feather name="check" size={16} color="#fff" /> : <View style={[styles.stepDot, {
-                  backgroundColor: selected ? colors.greenBright : '#fff', borderColor: selected ? colors.greenBright : colors.stepIdle,
-                }]} />}
-              </View>
-              {!last && line(index, colors.greenBright, colors.stepIdle, styles.stepLine)}
+          <View key={label} style={styles.step}>
+            <View style={[styles.stepNode, {
+              backgroundColor: completed ? colors.greenBright : '#fff',
+              borderColor: completed ? colors.greenBright : selected ? '#8db5f6' : colors.stepIdle,
+            }]}>
+              {completed ? <Feather name="check" size={16} color="#fff" /> : <View style={[styles.stepDot, {
+                backgroundColor: selected ? colors.greenBright : '#fff', borderColor: selected ? colors.greenBright : colors.stepIdle,
+              }]} />}
             </View>
-            <View style={styles.stepLabelRow}>
-              <View style={styles.stepLabelAnchor}>
-                <Text numberOfLines={index === 0 ? 2 : 1} style={[styles.stepLabel, {
-                  color: selected ? '#143263' : '#8a8f99', width: index === 0 ? 92 : 112,
-                }]}>{label}</Text>
-              </View>
-              {!last && <View style={{ flex: 1 }} />}
-            </View>
+            <Text style={[styles.stepLabel, { color: selected ? '#143263' : '#8a8f99' }]}>{label}</Text>
           </View>
         );
       })}
@@ -159,11 +152,11 @@ const styles = StyleSheet.create({
   timelineLabel: { fontFamily: fonts.medium, fontSize: 10, color: colors.heading },
   labelMuted: { color: colors.muted },
   stepper: { flexDirection: 'row', alignItems: 'flex-start' },
-  stepRow: { flexDirection: 'row', alignItems: 'center', width: '100%' },
+  // Start and end at the centers of the first and last of four equal columns.
+  statusLines: { position: 'absolute', top: 17, left: '12.5%', right: '12.5%', flexDirection: 'row' },
+  step: { flex: 1, minWidth: 0, paddingHorizontal: 2, alignItems: 'center' },
   stepNode: { width: 36, height: 36, borderRadius: 18, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   stepDot: { width: 12, height: 12, borderRadius: 6, borderWidth: 1 },
   stepLine: { flex: 1, height: 2 },
-  stepLabelRow: { flexDirection: 'row', width: '100%', minHeight: 34 },
-  stepLabelAnchor: { width: 36, overflow: 'visible', alignItems: 'center' },
-  stepLabel: { marginTop: 6, fontFamily: fonts.semibold, fontSize: 10, textAlign: 'center', lineHeight: 14, includeFontPadding: false },
+  stepLabel: { alignSelf: 'stretch', marginTop: 6, fontFamily: fonts.semibold, fontSize: 11, textAlign: 'center', lineHeight: 16, includeFontPadding: false },
 });

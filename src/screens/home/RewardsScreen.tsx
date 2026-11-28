@@ -115,6 +115,7 @@ const REWARD_IMAGES: Record<string, number> = {
   calendar: images.rewardCalendar,
   umbrella: images.rewardUmbrella,
   mug: images.rewardMug,
+  'protein shaker': images.rewardProteinShaker,
 };
 function rewardImageFor(name: string): number | null {
   const lower = name.toLowerCase();
@@ -886,6 +887,6 @@ const styles = StyleSheet.create({
 
   successCard: { gap: 12, alignItems: 'stretch' },
   successTitle: { fontFamily: fonts.bold, fontSize: 20, color: colors.primary, marginBottom: 4 },
-  successCode: { fontFamily: fonts.semibold, fontSize: 20, color: colors.primary, marginBottom: 12 },
+  successCode: { fontFamily: fonts.semibold, fontSize: 20, color: colors.primary, textAlign: 'center', marginBottom: 12 },
   successNote: { fontFamily: fonts.semibold, fontSize: 10, color: colors.primary, textAlign: 'center' },
 });

@@ -25,14 +25,13 @@ import type { MainNavigateOptions, MainScreen } from '@/navigation/types';
  * Orders (Figma "MyOrders"): active/past tabs, order details, and the two-step
  * post-delivery CSAT feedback (rate rider → rate branch + comment).
  *
- * SCAFFOLD: order data is Figma mock. Wire to the SRD endpoints; surface delivery
- * status MILESTONES only — never live GPS (AGENTS.md §7).
+ * Customer order history displays delivery milestones.
  */
 type Sub = 'list' | 'details';
 
 type OrderRow = ServiceRequestCylinderFields & {
   id: string;
-  branch_id: string;
+  branch_name?: string | null;
   status: 'Pending' | 'Dispatched' | 'En Route' | 'Delivered' | 'Completed' | 'Cancelled' | 'Under Review';
   customer_name: string;
   delivery_address: string;
@@ -314,21 +313,21 @@ export function OrdersScreen({ onNavigate, activeOrdersRef }: {
 
         <View style={styles.locRow}>
           <Feather name="map-pin" size={24} color={colors.primary} />
-          <View>
+          <View style={styles.locCopy}>
             <Text style={styles.locLabel}>Ordered From</Text>
-            <Text style={styles.locValue}>{detailOrder?.branch_id ?? 'Your selected branch'}</Text>
+            <Text style={styles.locValue}>{detailOrder?.branch_name?.trim() || 'Branch name unavailable'}</Text>
           </View>
         </View>
         <View style={styles.locRow}>
           <Feather name="map-pin" size={24} color="#CFCFCF" />
-          <View>
+          <View style={styles.locCopy}>
             <Text style={styles.locLabel}>Delivery Address</Text>
             <Text style={styles.locValue}>{detailOrder?.delivery_address ?? '—'}</Text>
           </View>
         </View>
         <View style={[styles.locRow, { alignItems: 'center' }]}>
           <Feather name="credit-card" size={24} color={colors.primary} />
-          <View style={{ flex: 1 }}>
+          <View style={styles.locCopy}>
             <Text style={styles.locValue}>{detailOrder?.payment_method ?? 'Cash on Delivery'}</Text>
             <Text style={styles.metaText}>
               {detailOrder?.payment_method === 'PayMongo'
@@ -430,6 +429,7 @@ const styles = StyleSheet.create({
   helpLink: { fontFamily: fonts.regular, fontSize: 12, color: colors.muted, textDecorationLine: 'underline', marginBottom: 4 },
   metaText: { fontFamily: fonts.regular, fontSize: 12, color: colors.grayText },
   locRow: { flexDirection: 'row', gap: 16, marginTop: 20 },
+  locCopy: { flex: 1, minWidth: 0 },
   locLabel: { fontFamily: fonts.medium, fontSize: 13, color: colors.grayText },
   locValue: { fontFamily: fonts.semibold, fontSize: 14, color: colors.label },
   productCard: { flexDirection: 'row', alignItems: 'center', marginHorizontal: 16, marginTop: 20, borderRadius: 12, borderWidth: 1, borderColor: colors.activeCardBorder, backgroundColor: '#fff', minHeight: 140, ...cardShadow },

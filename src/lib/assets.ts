@@ -19,6 +19,7 @@ export const images = {
   rewardCalendar: require('../../assets/images/reward-calendar.png'),
   rewardUmbrella: require('../../assets/images/reward-umbrella.png'),
   rewardMug: require('../../assets/images/reward-mug.png'),
+  rewardProteinShaker: require('../../assets/images/reward-protein-shaker.png'),
 
   // Payment logos
   gcash: require('../../assets/images/gcash.png'),

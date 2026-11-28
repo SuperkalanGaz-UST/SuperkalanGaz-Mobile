@@ -82,6 +82,7 @@ type BranchOption = {
 type OrderRow = {
   id: string;
   branch_id: string;
+  branch_name?: string | null;
   status: 'Pending' | 'Dispatched' | 'En Route' | 'Delivered' | 'Completed' | 'Cancelled' | 'Under Review';
   customer_name: string;
   customer_contact: string;
@@ -149,11 +150,6 @@ function normalizeBranchMatchText(value: string | null | undefined) {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, ' ')
     .trim();
-}
-
-function trimAfterCavite(value: string) {
-  const match = value.match(/^(.*?\bCavite\b)/i);
-  return match ? match[1].trim() : value.trim();
 }
 
 function branchMatchesCustomerLocation(
@@ -283,7 +279,7 @@ export function OrderProcessScreen({ onNavigate, initialOrderId, onOrderPlaced, 
   const insets = useSafeAreaInsets();
   const { session } = useAuth();
   const [selectedBranch, setSelectedBranch] = useState<BranchOption | null>(null);
-  const { prices, available, loading: pricesLoading, error: pricesError, refresh: refreshPrices } = useBranchPricing(selectedBranch?.id ?? null);
+  const { prices, inStock, loading: pricesLoading, error: pricesError, refresh: refreshPrices } = useBranchPricing(selectedBranch?.id ?? null);
   const customerName = [
     metadataText(session?.user.user_metadata?.first_name),
     metadataText(session?.user.user_metadata?.last_name),
@@ -309,9 +305,9 @@ export function OrderProcessScreen({ onNavigate, initialOrderId, onOrderPlaced, 
   const products = useMemo(
     () => PRODUCT_DETAILS.flatMap((product) => {
       const price = prices[product.id];
-      return price === undefined ? [] : [{ ...product, price, availableQty: available[product.id] ?? 0 }];
+      return price === undefined ? [] : [{ ...product, price, inStock: inStock[product.id] === true }];
     }),
-    [prices, available],
+    [prices, inStock],
   );
   const [step, setStep] = useState<Step>(initialOrderId ? 'track' : 'location');
   const [modal, setModal] = useState<ModalKind>('none');
@@ -468,9 +464,9 @@ export function OrderProcessScreen({ onNavigate, initialOrderId, onOrderPlaced, 
       quantity: quantities[selectedProduct.id] ?? 0,
     }))
     .filter(({ quantity }) => quantity > 0);
-  const stockShortage = selectedProducts.some(({ product, quantity }) => quantity > product.availableQty);
-  const canOrderSelected = !pricesLoading && !pricesError && selectedProducts.length > 0 && !stockShortage;
-  const hasStock = products.some((product) => product.availableQty > 0);
+  const hasSoldOutSelection = selectedProducts.some(({ product }) => !product.inStock);
+  const canOrderSelected = !pricesLoading && !pricesError && selectedProducts.length > 0 && !hasSoldOutSelection;
+  const hasStock = products.some((product) => product.inStock);
   const total = selectedProducts.reduce(
     (sum, item) => sum + item.product.price * item.quantity,
     0,
@@ -716,9 +712,9 @@ export function OrderProcessScreen({ onNavigate, initialOrderId, onOrderPlaced, 
   ]);
 
   const changeProductQuantity = (productId: CylinderSize, amount: number) => {
+    if (amount > 0 && !inStock[productId]) return;
     setQuantities((current) => {
       const next = Math.max(0, (current[productId] ?? 0) + amount);
-      if (amount > 0 && next > (available[productId] ?? 0)) return current;
       return { ...current, [productId]: next };
     });
   };
@@ -1275,8 +1271,7 @@ export function OrderProcessScreen({ onNavigate, initialOrderId, onOrderPlaced, 
           {products.map((product) => {
             const quantity = quantities[product.id] ?? 0;
             const selected = quantity > 0;
-            const soldOut = product.availableQty === 0;
-            const atLimit = quantity >= product.availableQty;
+            const soldOut = !product.inStock;
             const rowContent = (
               <>
                 <View style={styles.productArtWrap}>
@@ -1290,9 +1285,6 @@ export function OrderProcessScreen({ onNavigate, initialOrderId, onOrderPlaced, 
                   <Text style={[styles.productRowSize, soldOut && styles.productUnavailableText]}>{product.label}</Text>
                   <Text style={styles.productRowDesc}>{product.use}</Text>
                   <Text style={[styles.productRowPrice, soldOut && styles.productUnavailableText]}>{formatPeso(product.price)}</Text>
-                  <Text style={styles.productAvailability}>
-                    {soldOut ? 'Out of stock' : `${product.availableQty} available`}
-                  </Text>
                 </View>
 
                 {selected ? (
@@ -1313,8 +1305,8 @@ export function OrderProcessScreen({ onNavigate, initialOrderId, onOrderPlaced, 
                     <Pressable
                       accessibilityRole="button"
                       accessibilityLabel={`Add one ${product.label} cylinder`}
-                      accessibilityState={{ disabled: atLimit }}
-                      disabled={atLimit}
+                      accessibilityState={{ disabled: soldOut }}
+                      disabled={soldOut}
                       hitSlop={4}
                       onPress={() => changeProductQuantity(product.id, 1)}
                       style={({ pressed }) => [
@@ -1322,7 +1314,7 @@ export function OrderProcessScreen({ onNavigate, initialOrderId, onOrderPlaced, 
                         pressed ? styles.controlPressed : null,
                       ]}
                     >
-                      <Feather name="plus" size={18} color={atLimit ? colors.grayText : colors.heading} />
+                      <Feather name="plus" size={18} color={soldOut ? colors.grayText : colors.heading} />
                     </Pressable>
                   </View>
                 ) : !soldOut && (
@@ -1368,8 +1360,8 @@ export function OrderProcessScreen({ onNavigate, initialOrderId, onOrderPlaced, 
       </ScrollView>
 
       <View style={[styles.selectSummary, { paddingBottom: Math.max(insets.bottom, 16) }]}>
-        {stockShortage && <Text accessibilityRole="alert" style={styles.catalogErrorText}>
-          Reduce the selected quantities to match this branch’s stock.
+        {hasSoldOutSelection && <Text accessibilityRole="alert" style={styles.catalogErrorText}>
+          Remove sold-out cylinders to continue.
         </Text>}
         <View style={styles.selectSummaryCount}>
           <Text style={styles.selectSummaryTotal}>
@@ -1622,16 +1614,8 @@ export function OrderProcessScreen({ onNavigate, initialOrderId, onOrderPlaced, 
     const isOutForDelivery = orderProgress(currentOrder.status).step === 2;
     const isPending = currentOrder?.status === 'Pending';
 
-    // Build branch label: "Superkalan Gaz Amadeo, Cavite" — use name + city only
-    // distance holds city || province || full-address; take only the first comma-separated part
-    const cityPart = selectedBranch?.distance?.split(',')[0]?.trim() || '';
-    const branchName = selectedBranch?.name?.trim() || '';
-    const namePart = branchName.toLowerCase().includes('superkalan gaz')
-      ? branchName
-      : `Superkalan Gaz ${branchName}`.trim();
-    const branchLabel = trimAfterCavite([namePart, cityPart]
-      .filter(Boolean)
-      .join(', ') || 'Superkalan Gaz branch');
+    const branchLabel = currentOrder.branch_name?.trim()
+      || (selectedBranch && selectedBranch.id === currentOrder.branch_id ? selectedBranch.name : 'Your branch');
 
     return (
       <View style={{ paddingHorizontal: 24 }}>
@@ -2398,7 +2382,6 @@ const styles = StyleSheet.create({
   productRowDesc: { marginTop: 2, fontFamily: fonts.regular, fontSize: 12, lineHeight: 18, color: colors.grayText },
   productRowPrice: { marginTop: 3, fontFamily: fonts.semibold, fontSize: 13, color: colors.primary },
   productUnavailableText: { color: colors.textMuted },
-  productAvailability: { marginTop: 3, fontFamily: fonts.semibold, fontSize: 12, color: colors.textMuted },
   catalogLoading: { paddingVertical: 28 },
   catalogError: { alignItems: 'center', borderRadius: radii.card, backgroundColor: '#FEF2F2', padding: 20 },
   catalogErrorText: { textAlign: 'center', fontFamily: fonts.medium, fontSize: 13, color: '#B42318' },
